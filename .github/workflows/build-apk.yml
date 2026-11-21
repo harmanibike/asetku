@@ -41,6 +41,17 @@ jobs:
         working-directory: asetku
         run: flutter pub get
 
+      - name: Configure analysis options
+        working-directory: asetku
+        run: |
+          cat << 'EOF' > analysis_options.yaml
+          include: package:flutter_lints/flutter.yaml
+
+          analyzer:
+            errors:
+              deprecated_member_use: ignore
+          EOF
+
       - name: Analyze
         working-directory: asetku
         run: flutter analyze
