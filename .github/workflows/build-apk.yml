@@ -1,0 +1,53 @@
+name: Build Asetku APK
+
+on:
+push:
+branches: [main]
+workflow_dispatch:
+
+permissions:
+contents: read
+
+jobs:
+build:
+runs-on: ubuntu-latest
+steps:
+- name: Checkout
+uses: actions/checkout@v4
+
+  - name: Extract project
+    run: unzip asetku_flutter_starter.zip -d .
+
+  - name: Setup Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
+
+  - name: Setup Flutter
+    uses: subosito/flutter-action@v2
+    with:
+      channel: stable
+
+  - name: Generate Android files
+    working-directory: asetku
+    run: flutter create --platforms=android --org com.asetku .
+
+  - name: Install dependencies
+    working-directory: asetku
+    run: flutter pub get
+
+  - name: Analyze
+    working-directory: asetku
+    run: flutter analyze
+
+  - name: Build APK
+    working-directory: asetku
+    run: flutter build apk --release
+
+  - name: Upload APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: ASETKU-APK
+      path: asetku/build/app/outputs/flutter-apk/app-release.apk
+      retention-days: 14
