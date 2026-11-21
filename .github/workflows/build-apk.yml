@@ -2,7 +2,8 @@ name: Build Asetku APK
 
 on:
 push:
-branches: [main]
+branches:
+- main
 workflow_dispatch:
 
 permissions:
@@ -11,9 +12,10 @@ contents: read
 jobs:
 build:
 runs-on: ubuntu-latest
+
 steps:
-- name: Checkout
-uses: actions/checkout@v4
+  - name: Checkout
+    uses: actions/checkout@v4
 
   - name: Extract project
     run: unzip asetku_flutter_starter.zip -d .
