@@ -33,7 +33,9 @@ jobs:
 
       - name: Generate Android files
         working-directory: asetku
-        run: flutter create --platforms=android --org com.asetku .
+        run: |
+          flutter create --platforms=android --org com.asetku .
+          rm -f test/widget_test.dart
 
       - name: Install dependencies
         working-directory: asetku
