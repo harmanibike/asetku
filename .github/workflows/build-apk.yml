@@ -1,3 +1,4 @@
+
 name: Build Asetku APK
 
 on:
@@ -36,6 +37,35 @@ jobs:
         run: |
           flutter create --platforms=android --org com.asetku .
           rm -f test/widget_test.dart
+
+      - name: Ensure Android Internet Permission
+        working-directory: asetku
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          content = path.read_text()
+
+          permission = '<uses-permission android:name="android.permission.INTERNET"/>'
+
+          if "android.permission.INTERNET" not in content:
+              if "<application" not in content:
+                  raise SystemExit("Tag application tidak ditemukan")
+              content = content.replace(
+                  "<application",
+                  f"    {permission}\n    <application",
+                  1
+              )
+              path.write_text(content)
+
+          print("Internet permission tersedia.")
+          PY
+
+      - name: Verify Android Manifest
+        working-directory: asetku
+        run: |
+          grep -n "uses-permission\|INTERNET\|application" android/app/src/main/AndroidManifest.xml
 
       - name: Install dependencies
         working-directory: asetku
