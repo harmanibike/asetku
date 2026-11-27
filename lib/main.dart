@@ -1,0 +1,227 @@
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const AsetkuApp());
+}
+
+String rupiah(num value) => NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(value);
+
+class LocalDb {
+  LocalDb._();
+  static final LocalDb instance = LocalDb._();
+  Database? _db;
+  Future<Database> get db async {
+    if (_db != null) return _db!;
+    final dir = await getDatabasesPath();
+    _db = await openDatabase(p.join(dir, 'asetku.db'), version: 1, onCreate: (db, version) async {
+      await db.execute('CREATE TABLE assets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL, cost REAL NOT NULL, value REAL NOT NULL, created_at TEXT NOT NULL)');
+      await db.execute('CREATE TABLE debts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL)');
+      await db.execute('CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, assets REAL NOT NULL, debts REAL NOT NULL, net_worth REAL NOT NULL, recorded_at TEXT NOT NULL)');
+    });
+    return _db!;
+  }
+  Future<List<Map<String, Object?>>> list(String table) async => (await db).query(table, orderBy: 'id DESC');
+  Future<void> addAsset(String name, String category, double cost, double value) async => (await db).insert('assets', {'name': name, 'category': category, 'cost': cost, 'value': value, 'created_at': DateTime.now().toIso8601String()});
+  Future<void> addDebt(String name, double amount) async => (await db).insert('debts', {'name': name, 'amount': amount, 'created_at': DateTime.now().toIso8601String()});
+  Future<void> delete(String table, int id) async {
+    if (table == 'assets' || table == 'debts') await (await db).delete(table, where: 'id = ?', whereArgs: [id]);
+  }
+  Future<Map<String, double>> totals() async {
+    final d = await db;
+    final a = await d.rawQuery('SELECT COALESCE(SUM(value),0) total, COALESCE(SUM(cost),0) cost FROM assets');
+    final b = await d.rawQuery('SELECT COALESCE(SUM(amount),0) total FROM debts');
+    final assets = (a.first['total'] as num).toDouble();
+    final cost = (a.first['cost'] as num).toDouble();
+    final debts = (b.first['total'] as num).toDouble();
+    return {'assets': assets, 'cost': cost, 'debts': debts, 'net': assets - debts, 'pnl': assets - cost};
+  }
+}
+
+class AsetkuApp extends StatelessWidget {
+  const AsetkuApp({super.key});
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'Asetku', debugShowCheckedModeBanner: false,
+    theme: ThemeData(useMaterial3: true, colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1769AA)), scaffoldBackgroundColor: const Color(0xFFF5F7FA)),
+    home: const MainScreen(),
+  );
+}
+
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+class _MainScreenState extends State<MainScreen> {
+  int tab = 0;
+  int refresh = 0;
+  void changed() => setState(() => refresh++);
+  @override
+  Widget build(BuildContext context) {
+    final pages = [
+      Dashboard(key: ValueKey('home$refresh'), changed: changed),
+      Records(key: ValueKey('assets$refresh'), table: 'assets', changed: changed),
+      Records(key: ValueKey('debts$refresh'), table: 'debts', changed: changed),
+      const SettingsPage(),
+    ];
+    return Scaffold(
+      appBar: AppBar(title: const Row(children: [Icon(Icons.account_balance_wallet, color: Color(0xFF1769AA)), SizedBox(width: 9), Text('Asetku', style: TextStyle(fontWeight: FontWeight.w800))])),
+      body: IndexedStack(index: tab, children: pages),
+      bottomNavigationBar: NavigationBar(selectedIndex: tab, onDestinationSelected: (v) => setState(() => tab = v), destinations: const [
+        NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Ringkasan'),
+        NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Aset'),
+        NavigationDestination(icon: Icon(Icons.credit_card_outlined), label: 'Utang'),
+        NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Pengaturan'),
+      ]),
+    );
+  }
+}
+
+class Dashboard extends StatelessWidget {
+  const Dashboard({super.key, required this.changed});
+  final VoidCallback changed;
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Map<String, double>>(
+    future: LocalDb.instance.totals(),
+    builder: (context, snapshot) {
+      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+      final t = snapshot.data!;
+      final assets = t['assets']!;
+      final debts = t['debts']!;
+      final net = t['net']!;
+      final pnl = t['pnl']!;
+      return RefreshIndicator(onRefresh: () async => changed(), child: ListView(padding: const EdgeInsets.all(16), children: [
+        const Text('Ringkasan kekayaan', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 12),
+        Container(padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: const Color(0xFF1769AA), borderRadius: BorderRadius.circular(18)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Kekayaan bersih', style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 8),
+          Text(rupiah(net), style: const TextStyle(color: Colors.white, fontSize: 27, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 12),
+          Text('Total aset: ' + rupiah(assets), style: const TextStyle(color: Colors.white)),
+        ])),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: Metric(title: 'Total aset', value: rupiah(assets), icon: Icons.savings_outlined)),
+          const SizedBox(width: 10),
+          Expanded(child: Metric(title: 'Total utang', value: rupiah(debts), icon: Icons.credit_card_outlined)),
+        ]),
+        const SizedBox(height: 10),
+        Metric(title: 'Untung / rugi belum terealisasi', value: rupiah(pnl), icon: Icons.trending_up),
+        const SizedBox(height: 20),
+        const Text('Mulai mencatat', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(child: FilledButton.icon(onPressed: () => assetDialog(context, changed), icon: const Icon(Icons.add), label: const Text('Tambah aset'))),
+          const SizedBox(width: 10),
+          Expanded(child: OutlinedButton.icon(onPressed: () => debtDialog(context, changed), icon: const Icon(Icons.add), label: const Text('Tambah utang'))),
+        ]),
+        const SizedBox(height: 18),
+        const Text('Aplikasi gratis tanpa akun dan lisensi. Data utama disimpan di perangkat dan dapat digunakan offline.', style: TextStyle(color: Color(0xFF667085), height: 1.4)),
+      ]));
+    },
+  );
+}
+
+class Metric extends StatelessWidget {
+  const Metric({super.key, required this.title, required this.value, required this.icon});
+  final String title, value;
+  final IconData icon;
+  @override
+  Widget build(BuildContext context) => Card(child: Padding(padding: const EdgeInsets.all(14), child: Row(children: [
+    Icon(icon, color: const Color(0xFF1769AA)), const SizedBox(width: 10),
+    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(title, style: const TextStyle(fontSize: 11, color: Color(0xFF667085))),
+      const SizedBox(height: 4), Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
+    ])),
+  ])));
+}
+
+class Records extends StatelessWidget {
+  const Records({super.key, required this.table, required this.changed});
+  final String table;
+  final VoidCallback changed;
+  @override
+  Widget build(BuildContext context) {
+    final isAsset = table == 'assets';
+    return FutureBuilder<List<Map<String, Object?>>>(
+      future: LocalDb.instance.list(table),
+      builder: (context, snapshot) {
+        final rows = snapshot.data ?? [];
+        return Scaffold(backgroundColor: Colors.transparent,
+          floatingActionButton: FloatingActionButton.extended(onPressed: () => isAsset ? assetDialog(context, changed) : debtDialog(context, changed), icon: const Icon(Icons.add), label: Text(isAsset ? 'Tambah aset' : 'Tambah utang')),
+          body: !snapshot.hasData ? const Center(child: CircularProgressIndicator()) : rows.isEmpty
+            ? Center(child: Text(isAsset ? 'Belum ada aset. Tambahkan aset pertama.' : 'Belum ada utang.'))
+            : ListView.builder(padding: const EdgeInsets.fromLTRB(12, 12, 12, 90), itemCount: rows.length, itemBuilder: (context, i) {
+              final row = rows[i];
+              final amount = row[isAsset ? 'value' : 'amount'] as num;
+              final subtitle = isAsset ? (row['category'] as String) + ' • Modal ' + rupiah(row['cost'] as num) : 'Kewajiban';
+              return Card(child: ListTile(
+                leading: CircleAvatar(child: Icon(isAsset ? Icons.account_balance_wallet_outlined : Icons.credit_card_outlined)),
+                title: Text(row['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text(subtitle), trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(rupiah(amount), style: const TextStyle(fontWeight: FontWeight.w700)),
+                  PopupMenuButton<String>(onSelected: (v) async { if (v == 'delete') { await LocalDb.instance.delete(table, row['id'] as int); changed(); } }, itemBuilder: (_) => const [PopupMenuItem(value: 'delete', child: Text('Hapus'))]),
+                ]),
+              ));
+            }),
+        );
+      },
+    );
+  }
+}
+
+class SettingsPage extends StatelessWidget {
+  const SettingsPage({super.key});
+  @override
+  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(16), children: const [
+    Text('Pengaturan', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+    SizedBox(height: 12),
+    Card(child: ListTile(leading: Icon(Icons.storage_outlined), title: Text('Database lokal'), subtitle: Text('Data tersimpan di perangkat menggunakan SQLite.'))),
+    Card(child: ListTile(leading: Icon(Icons.backup_outlined), title: Text('Backup & pemulihan'), subtitle: Text('Disiapkan pada tahap berikutnya.'))),
+    Card(child: ListTile(leading: Icon(Icons.cloud_off_outlined), title: Text('Mode offline'), subtitle: Text('Pencatatan tetap berjalan tanpa internet.'))),
+    Card(child: ListTile(leading: Icon(Icons.info_outline), title: Text('Tentang Asetku'), subtitle: Text('Gratis • Tanpa akun • Tanpa lisensi'))),
+  ]);
+}
+
+Future<void> assetDialog(BuildContext context, VoidCallback changed) async {
+  final name = TextEditingController(), cost = TextEditingController(), value = TextEditingController();
+  String category = 'Kas & Simpanan';
+  const categories = ['Emas', 'Saham', 'Reksadana', 'Obligasi & SBN', 'Crypto', 'Kas & Simpanan', 'Properti', 'Kendaraan', 'Aset Lainnya'];
+  final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, localSet) => AlertDialog(
+    title: const Text('Tambah aset'),
+    content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      TextField(controller: name, decoration: const InputDecoration(labelText: 'Nama aset')),
+      DropdownButtonFormField<String>(value: category, decoration: const InputDecoration(labelText: 'Kategori'), items: categories.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) => localSet(() => category = v ?? category)),
+      TextField(controller: cost, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Total modal (Rp)')),
+      TextField(controller: value, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Nilai saat ini (Rp)')),
+    ])),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+      FilledButton(onPressed: () { if (name.text.trim().isNotEmpty && double.tryParse(value.text) != null) Navigator.pop(ctx, true); }, child: const Text('Simpan')),
+    ],
+  )));
+  if (ok == true) { await LocalDb.instance.addAsset(name.text.trim(), category, double.tryParse(cost.text) ?? 0, double.tryParse(value.text) ?? 0); changed(); }
+  name.dispose(); cost.dispose(); value.dispose();
+}
+
+Future<void> debtDialog(BuildContext context, VoidCallback changed) async {
+  final name = TextEditingController(), amount = TextEditingController();
+  final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+    title: const Text('Tambah utang'),
+    content: Column(mainAxisSize: MainAxisSize.min, children: [
+      TextField(controller: name, decoration: const InputDecoration(labelText: 'Nama utang / kewajiban')),
+      TextField(controller: amount, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah (Rp)')),
+    ]),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+      FilledButton(onPressed: () { if (name.text.trim().isNotEmpty && double.tryParse(amount.text) != null) Navigator.pop(ctx, true); }, child: const Text('Simpan')),
+    ],
+  ));
+  if (ok == true) { await LocalDb.instance.addDebt(name.text.trim(), double.tryParse(amount.text) ?? 0); changed(); }
+  name.dispose(); amount.dispose();
+}
