@@ -145,6 +145,16 @@ class LocalDb {
     });
   }
 
+  Future<List<Map<String, Object?>>> allocation() async {
+    final d = await db;
+    return d.rawQuery('SELECT category, SUM(value) AS total FROM assets GROUP BY category HAVING SUM(value) > 0 ORDER BY total DESC');
+  }
+
+  Future<List<Map<String, Object?>>> netWorthHistory() async {
+    final d = await db;
+    return d.query('snapshots', orderBy: 'recorded_at ASC', limit: 30);
+  }
+
   Future<Map<String, double>> totals() async {
     final d = await db;
     final a = await d.rawQuery('SELECT COALESCE(SUM(value),0) total, COALESCE(SUM(cost),0) cost FROM assets');
@@ -152,6 +162,12 @@ class LocalDb {
     final assets = (a.first['total'] as num).toDouble();
     final cost = (a.first['cost'] as num).toDouble();
     final debts = (b.first['total'] as num).toDouble();
+    final now = DateTime.now();
+    final latest = await d.query('snapshots', orderBy: 'recorded_at DESC', limit: 1);
+    final lastDate = latest.isEmpty ? null : DateTime.tryParse(latest.first['recorded_at'] as String);
+    if (lastDate == null || lastDate.year != now.year || lastDate.month != now.month || lastDate.day != now.day) {
+      await d.insert('snapshots', {'assets': assets, 'debts': debts, 'net_worth': assets - debts, 'recorded_at': now.toIso8601String()});
+    }
     return {'assets': assets, 'cost': cost, 'debts': debts, 'net': assets - debts, 'pnl': assets - cost};
   }
 }
@@ -200,15 +216,22 @@ class Dashboard extends StatelessWidget {
   const Dashboard({super.key, required this.changed});
   final VoidCallback changed;
   @override
-  Widget build(BuildContext context) => FutureBuilder<Map<String, double>>(
-    future: LocalDb.instance.totals(),
+  Widget build(BuildContext context) => FutureBuilder<List<Object>>(
+    future: Future.wait<Object>([
+      LocalDb.instance.totals(),
+      LocalDb.instance.allocation(),
+      LocalDb.instance.netWorthHistory(),
+    ]),
     builder: (context, snapshot) {
       if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-      final t = snapshot.data!;
+      final t = snapshot.data![0] as Map<String, double>;
+      final categories = snapshot.data![1] as List<Map<String, Object?>>;
+      final history = snapshot.data![2] as List<Map<String, Object?>>;
       final assets = t['assets']!;
       final debts = t['debts']!;
       final net = t['net']!;
       final pnl = t['pnl']!;
+      final historyValues = history.map((r) => (r['net_worth'] as num).toDouble()).toList();
       return RefreshIndicator(onRefresh: () async => changed(), child: ListView(padding: const EdgeInsets.all(16), children: [
         const Text('Ringkasan kekayaan', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
         const SizedBox(height: 12),
@@ -227,6 +250,32 @@ class Dashboard extends StatelessWidget {
         ]),
         const SizedBox(height: 10),
         Metric(title: 'Untung / rugi belum terealisasi', value: rupiah(pnl), icon: Icons.trending_up),
+        const SizedBox(height: 18),
+        const Text('Alokasi aset', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        if (categories.isEmpty)
+          const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Alokasi akan muncul setelah aset ditambahkan.')))
+        else
+          Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: categories.map((row) {
+            final total = (row['total'] as num).toDouble();
+            final ratio = assets <= 0 ? 0.0 : (total / assets).clamp(0.0, 1.0);
+            return Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [Expanded(child: Text(row['category'] as String, style: const TextStyle(fontWeight: FontWeight.w600))), Text('${(ratio * 100).toStringAsFixed(1)}%  •  ${rupiah(total)}', style: const TextStyle(fontSize: 11))]),
+              const SizedBox(height: 5),
+              ClipRRect(borderRadius: BorderRadius.circular(8), child: LinearProgressIndicator(value: ratio, minHeight: 8, backgroundColor: const Color(0xFFE8EDF3))),
+            ]));
+          }).toList()))),
+        const SizedBox(height: 18),
+        const Text('Riwayat kekayaan bersih', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        Card(child: Padding(padding: const EdgeInsets.all(14), child: historyValues.length < 2
+          ? const Text('Grafik akan terbentuk dari catatan harian. Buka ringkasan pada hari berbeda untuk merekam perkembangan.')
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SizedBox(height: 150, width: double.infinity, child: CustomPaint(painter: NetWorthChartPainter(historyValues))),
+              const SizedBox(height: 8),
+              Text('Terakhir: ${rupiah(historyValues.last)}', style: const TextStyle(fontWeight: FontWeight.w700)),
+              Text('${history.length} catatan terakhir', style: const TextStyle(fontSize: 11, color: Color(0xFF667085))),
+            ]))),
         const SizedBox(height: 20),
         const Text('Mulai mencatat', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
         const SizedBox(height: 8),
@@ -240,6 +289,39 @@ class Dashboard extends StatelessWidget {
       ]));
     },
   );
+}
+
+class NetWorthChartPainter extends CustomPainter {
+  NetWorthChartPainter(this.values);
+  final List<double> values;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.length < 2 || size.width <= 0 || size.height <= 0) return;
+    final minValue = values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final range = maxValue - minValue;
+    final line = Paint()..color = const Color(0xFF1769AA)..strokeWidth = 2.5..style = PaintingStyle.stroke..strokeCap = StrokeCap.round;
+    final grid = Paint()..color = const Color(0xFFE8EDF3)..strokeWidth = 1;
+    for (var i = 0; i < 4; i++) {
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+    final path = Path();
+    for (var i = 0; i < values.length; i++) {
+      final x = size.width * i / (values.length - 1);
+      final normalized = range == 0 ? 0.5 : (values[i] - minValue) / range;
+      final y = size.height - normalized * (size.height - 12) - 6;
+      if (i == 0) { path.moveTo(x, y); } else { path.lineTo(x, y); }
+    }
+    canvas.drawPath(path, line);
+    final dot = Paint()..color = const Color(0xFF1769AA);
+    final lastY = size.height - (range == 0 ? 0.5 : (values.last - minValue) / range) * (size.height - 12) - 6;
+    canvas.drawCircle(Offset(size.width, lastY), 4, dot);
+  }
+
+  @override
+  bool shouldRepaint(covariant NetWorthChartPainter oldDelegate) => oldDelegate.values != values;
 }
 
 class Metric extends StatelessWidget {
