@@ -34,12 +34,13 @@ class LocalDb {
   Future<Database> get db async {
     if (_db != null) return _db!;
     final dir = await getDatabasesPath();
-    _db = await openDatabase(p.join(dir, 'asetku.db'), version: 2, onCreate: (db, version) async {
+    _db = await openDatabase(p.join(dir, 'asetku.db'), version: 3, onCreate: (db, version) async {
       await db.execute('CREATE TABLE assets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL, cost REAL NOT NULL, value REAL NOT NULL, created_at TEXT NOT NULL)');
       await db.execute('CREATE TABLE debts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL)');
       await db.execute('CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, assets REAL NOT NULL, debts REAL NOT NULL, net_worth REAL NOT NULL, recorded_at TEXT NOT NULL)');
       await db.execute('CREATE TABLE asset_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL, type TEXT NOT NULL, units REAL NOT NULL, unit_price REAL NOT NULL, fee REAL NOT NULL DEFAULT 0, transaction_date TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL)');
-    }, onUpgrade: (db, oldVersion, newVersion) async { if (oldVersion < 2) await db.execute('CREATE TABLE asset_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL, type TEXT NOT NULL, units REAL NOT NULL, unit_price REAL NOT NULL, fee REAL NOT NULL DEFAULT 0, transaction_date TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL)'); });
+      await db.execute('CREATE TABLE market_prices (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL UNIQUE, unit_price REAL NOT NULL, source TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    }, onUpgrade: (db, oldVersion, newVersion) async { if (oldVersion < 2) await db.execute('CREATE TABLE asset_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL, type TEXT NOT NULL, units REAL NOT NULL, unit_price REAL NOT NULL, fee REAL NOT NULL DEFAULT 0, transaction_date TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL)'); if (oldVersion < 3) await db.execute('CREATE TABLE market_prices (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL UNIQUE, unit_price REAL NOT NULL, source TEXT NOT NULL, updated_at TEXT NOT NULL)'); });
     return _db!;
   }
   Future<List<Map<String, Object?>>> list(String table) async => (await db).query(table, orderBy: 'id DESC');
@@ -58,13 +59,15 @@ class LocalDb {
     await d.update('assets', {'cost': position.costBasis}, where: 'id = ?', whereArgs: [assetId]);
   }
   Future<List<Map<String, Object?>>> transactionsForAsset(int assetId) async => (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date DESC, id DESC');
+  Future<Map<String, Object?>?> marketPriceForAsset(int assetId) async { final rows = await (await db).query('market_prices', where: 'asset_id = ?', whereArgs: [assetId], limit: 1); return rows.isEmpty ? null : rows.first; }
+  Future<void> saveMarketPrice(int assetId, double price, {String source = 'manual'}) async { final d = await db; await d.insert('market_prices', {'asset_id': assetId, 'unit_price': price, 'source': source, 'updated_at': DateTime.now().toIso8601String()}, conflictAlgorithm: ConflictAlgorithm.replace); final position = await positionForAsset(assetId); if (position.units > 0) await d.update('assets', {'value': position.units * price}, where: 'id = ?', whereArgs: [assetId]); }
   Future<PortfolioPosition> positionForAsset(int assetId) async {
     final rows = await (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date ASC, id ASC');
     return calculatePosition(rows.map((r) => PortfolioTransaction(type: r['type'] as String, units: (r['units'] as num).toDouble(), unitPrice: (r['unit_price'] as num).toDouble(), fee: (r['fee'] as num).toDouble(), date: DateTime.parse(r['transaction_date'] as String))));
   }
   Future<void> delete(String table, int id) async {
     final d = await db;
-    if (table == 'assets') { await d.delete('asset_transactions', where: 'asset_id = ?', whereArgs: [id]); await d.delete('assets', where: 'id = ?', whereArgs: [id]); }
+    if (table == 'assets') { await d.delete('asset_transactions', where: 'asset_id = ?', whereArgs: [id]); await d.delete('market_prices', where: 'asset_id = ?', whereArgs: [id]); await d.delete('assets', where: 'id = ?', whereArgs: [id]); }
     if (table == 'debts') await d.delete('debts', where: 'id = ?', whereArgs: [id]);
   }
   Future<Map<String, Object?>> exportBackup() async {
@@ -73,21 +76,23 @@ class LocalDb {
     final debts = await d.query('debts', orderBy: 'id ASC');
     final snapshots = await d.query('snapshots', orderBy: 'id ASC');
     final transactions = await d.query('asset_transactions', orderBy: 'id ASC');
+    final marketPrices = await d.query('market_prices', orderBy: 'id ASC');
     return {
       'app': 'Asetku',
-      'schema_version': 2,
+      'schema_version': 3,
       'exported_at': DateTime.now().toIso8601String(),
       'assets': assets,
       'debts': debts,
       'snapshots': snapshots,
       'asset_transactions': transactions,
+      'market_prices': marketPrices,
     };
   }
 
   Future<void> restoreBackup(Map<String, dynamic> backup) async {
     if (backup['app'] != 'Asetku' || backup['schema_version'] is! int ||
         (backup['schema_version'] as int) < 1 ||
-        (backup['schema_version'] as int) > 2) {
+        (backup['schema_version'] as int) > 3) {
       throw const FormatException('File bukan backup Asetku yang didukung.');
     }
     List<Map<String, Object?>> rows(String key) {
@@ -102,6 +107,7 @@ class LocalDb {
     final debts = rows('debts');
     final snapshots = rows('snapshots');
     final transactions = rows('asset_transactions');
+    final marketPrices = rows('market_prices');
     for (final row in assets) {
       if (row['id'] is! num || row['name'] is! String ||
           row['category'] is! String || row['cost'] is! num ||
@@ -132,9 +138,15 @@ class LocalDb {
         throw const FormatException('Riwayat transaksi merujuk aset yang tidak tersedia.');
       }
     }
+    for (final row in marketPrices) {
+      if (row['id'] is! num || row['asset_id'] is! num || !assetIds.contains(row['asset_id']) || row['unit_price'] is! num || (row['unit_price'] as num) < 0 || row['source'] is! String || row['updated_at'] is! String) {
+        throw const FormatException('Data harga pasar tidak valid.');
+      }
+    }
     final d = await db;
     await d.transaction((txn) async {
       await txn.delete('asset_transactions');
+      await txn.delete('market_prices');
       await txn.delete('snapshots');
       await txn.delete('debts');
       await txn.delete('assets');
@@ -149,6 +161,9 @@ class LocalDb {
       }
       for (final row in transactions) {
         await txn.insert('asset_transactions', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final row in marketPrices) {
+        await txn.insert('market_prices', row, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -423,14 +438,19 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
     final id = widget.asset['id'] as int;
     return Scaffold(appBar: AppBar(title: Text(widget.asset['name'] as String)),
       floatingActionButton: FloatingActionButton.extended(onPressed: () async { await transactionDialog(context, id); if (mounted) setState(() => revision++); widget.changed(); }, icon: const Icon(Icons.add), label: const Text('Transaksi')),
-      body: FutureBuilder<List<Object>>(key: ValueKey(revision), future: Future.wait<Object>([LocalDb.instance.positionForAsset(id), LocalDb.instance.transactionsForAsset(id)]), builder: (context, s) {
+      body: FutureBuilder<List<Object>>(key: ValueKey(revision), future: Future.wait<Object>([LocalDb.instance.positionForAsset(id), LocalDb.instance.transactionsForAsset(id), LocalDb.instance.marketPriceForAsset(id)]), builder: (context, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
-        final p = s.data![0] as PortfolioPosition; final rows = s.data![1] as List<Map<String, Object?>>;
+        final p = s.data![0] as PortfolioPosition; final rows = s.data![1] as List<Map<String, Object?>>; final market = s.data![2] as Map<String, Object?>?;
         return ListView(padding: const EdgeInsets.all(16), children: [
           Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Posisi investasi', style: TextStyle(fontWeight: FontWeight.w800)),
             positionLine('Jumlah unit', p.units.toStringAsFixed(6)), positionLine('Harga rata-rata', rupiah(p.averageCost)), positionLine('Modal tersisa', rupiah(p.costBasis)), positionLine('Laba/rugi terealisasi', rupiah(p.realizedProfitLoss)),
+            if (market != null) positionLine('Harga pasar terakhir', rupiah(market['unit_price'] as num)),
+            if (market != null) positionLine('Nilai estimasi', rupiah(p.units * (market['unit_price'] as num))),
+            if (market != null) positionLine('Sumber / diperbarui', '${market['source']} • ${DateFormat('dd MMM yyyy HH:mm').format(DateTime.parse(market['updated_at'] as String))}'),
           ]))),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(onPressed: () async { await marketPriceDialog(context, id); if (mounted) setState(() => revision++); widget.changed(); }, icon: const Icon(Icons.price_change_outlined), label: const Text('Perbarui harga pasar manual')),
           const SizedBox(height: 12), const Text('Riwayat transaksi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
           if (rows.isEmpty) const Text('Belum ada transaksi beli atau jual.'),
           ...rows.map((r) { final buy = r['type'] == 'buy'; return Card(child: ListTile(leading: Icon(buy ? Icons.south_west : Icons.north_east, color: buy ? Colors.green : Colors.red), title: Text((buy ? 'Beli ' : 'Jual ') + r['units'].toString()), subtitle: Text(DateFormat('dd MMM yyyy').format(DateTime.parse(r['transaction_date'] as String)) + ' • ' + (r['note'] as String)), trailing: Text(rupiah((r['units'] as num) * (r['unit_price'] as num))))); }),
@@ -440,6 +460,24 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
   }
 }
 Widget positionLine(String a, String b) => Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [Expanded(child: Text(a)), Text(b, style: const TextStyle(fontWeight: FontWeight.w700))]));
+Future<void> marketPriceDialog(BuildContext context, int assetId) async {
+  final existing = await LocalDb.instance.marketPriceForAsset(assetId);
+  final controller = TextEditingController(text: existing == null ? '' : NumberFormat.decimalPattern('id_ID').format((existing['unit_price'] as num).round()));
+  final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+    title: const Text('Perbarui harga pasar'),
+    content: Column(mainAxisSize: MainAxisSize.min, children: [
+      const Text('Masukkan harga per unit. Jika sudah ada transaksi beli/jual, nilai aset dihitung dari jumlah unit × harga ini.'),
+      TextField(controller: controller, autofocus: true, keyboardType: TextInputType.number, inputFormatters: [RupiahInputFormatter()], decoration: const InputDecoration(labelText: 'Harga per unit (Rp)')),
+    ]),
+    actions: [
+      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+      FilledButton(onPressed: () { if (parseNominal(controller.text) <= 0) { ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Harga harus lebih dari nol.'))); return; } Navigator.pop(ctx, true); }, child: const Text('Simpan')),
+    ],
+  ));
+  if (ok == true) await LocalDb.instance.saveMarketPrice(assetId, parseNominal(controller.text).toDouble());
+  controller.dispose();
+}
+
 Future<void> transactionDialog(BuildContext context, int assetId) async {
   final units = TextEditingController(), price = TextEditingController(), fee = TextEditingController(text: '0'), note = TextEditingController();
   String type = 'buy'; final form = GlobalKey<FormState>();
