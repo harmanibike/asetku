@@ -36,6 +36,27 @@ jobs:
           if [ ! -f android/gradlew ]; then
             flutter create --platforms=android --org com.asetku --project-name asetku .
           fi
+      - name: Set Android compile SDK
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          candidates = [Path('android/app/build.gradle'), Path('android/app/build.gradle.kts')]
+          found = False
+          for path in candidates:
+              if not path.exists():
+                  continue
+              source = path.read_text()
+              updated = source.replace('compileSdk = flutter.compileSdkVersion', 'compileSdk = 36')
+              updated = updated.replace('compileSdkVersion flutter.compileSdkVersion', 'compileSdkVersion 36')
+              if updated != source:
+                  path.write_text(updated)
+                  found = True
+                  print(f'Updated compile SDK to 36 in {path}')
+              elif 'compileSdk = 36' in source or 'compileSdkVersion 36' in source:
+                  found = True
+          if not found:
+              raise SystemExit('Could not set Android compile SDK to 36 in app Gradle file')
+          PY
       - name: Install packages
         run: flutter pub get
       - name: Format Dart sources
