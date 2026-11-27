@@ -151,6 +151,7 @@ class LocalDb {
   }
 
   Future<List<Map<String, Object?>>> netWorthHistory() async {
+    await totals();
     final d = await db;
     return d.query('snapshots', orderBy: 'recorded_at ASC', limit: 30);
   }
@@ -258,7 +259,7 @@ class Dashboard extends StatelessWidget {
         else
           Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: categories.map((row) {
             final total = (row['total'] as num).toDouble();
-            final ratio = assets <= 0 ? 0.0 : (total / assets).clamp(0.0, 1.0);
+            final ratio = assets <= 0 ? 0.0 : (total / assets).clamp(0.0, 1.0).toDouble();
             return Padding(padding: const EdgeInsets.symmetric(vertical: 7), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [Expanded(child: Text(row['category'] as String, style: const TextStyle(fontWeight: FontWeight.w600))), Text('${(ratio * 100).toStringAsFixed(1)}%  •  ${rupiah(total)}', style: const TextStyle(fontSize: 11))]),
               const SizedBox(height: 5),
