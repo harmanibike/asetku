@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
@@ -9,6 +10,18 @@ void main() {
 }
 
 String rupiah(num value) => NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(value);
+
+int parseNominal(String text) => int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+
+class RupiahInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) return const TextEditingValue(text: '');
+    final formatted = NumberFormat.decimalPattern('id_ID').format(int.parse(digits));
+    return TextEditingValue(text: formatted, selection: TextSelection.collapsed(offset: formatted.length));
+  }
+}
 
 class LocalDb {
   LocalDb._();
@@ -26,7 +39,13 @@ class LocalDb {
   }
   Future<List<Map<String, Object?>>> list(String table) async => (await db).query(table, orderBy: 'id DESC');
   Future<void> addAsset(String name, String category, double cost, double value) async { await (await db).insert('assets', {'name': name, 'category': category, 'cost': cost, 'value': value, 'created_at': DateTime.now().toIso8601String()}); }
+  Future<void> updateAsset(int id, String name, String category, double cost, double value) async {
+    await (await db).update('assets', {'name': name, 'category': category, 'cost': cost, 'value': value}, where: 'id = ?', whereArgs: [id]);
+  }
   Future<void> addDebt(String name, double amount) async { await (await db).insert('debts', {'name': name, 'amount': amount, 'created_at': DateTime.now().toIso8601String()}); }
+  Future<void> updateDebt(int id, String name, double amount) async {
+    await (await db).update('debts', {'name': name, 'amount': amount}, where: 'id = ?', whereArgs: [id]);
+  }
   Future<void> delete(String table, int id) async {
     if (table == 'assets' || table == 'debts') await (await db).delete(table, where: 'id = ?', whereArgs: [id]);
   }
@@ -165,7 +184,34 @@ class Records extends StatelessWidget {
                 title: Text(row['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
                 subtitle: Text(subtitle), trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text(rupiah(amount), style: const TextStyle(fontWeight: FontWeight.w700)),
-                  PopupMenuButton<String>(onSelected: (v) async { if (v == 'delete') { await LocalDb.instance.delete(table, row['id'] as int); changed(); } }, itemBuilder: (_) => const [PopupMenuItem(value: 'delete', child: Text('Hapus'))]),
+                  PopupMenuButton<String>(
+                    onSelected: (v) async {
+                      if (v == 'edit') {
+                        if (isAsset) {
+                          await assetDialog(context, changed, existing: row);
+                        } else {
+                          await debtDialog(context, changed, existing: row);
+                        }
+                      } else if (v == 'delete') {
+                        final confirm = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
+                          title: const Text('Hapus data?'),
+                          content: Text('Data "${row['name']}" akan dihapus dari perangkat.'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+                            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Hapus')),
+                          ],
+                        ));
+                        if (confirm == true) {
+                          await LocalDb.instance.delete(table, row['id'] as int);
+                          changed();
+                        }
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'edit', child: Text('Edit')),
+                      PopupMenuItem(value: 'delete', child: Text('Hapus')),
+                    ],
+                  ),
                 ]),
               ));
             }),
@@ -188,40 +234,75 @@ class SettingsPage extends StatelessWidget {
   ]);
 }
 
-Future<void> assetDialog(BuildContext context, VoidCallback changed) async {
-  final name = TextEditingController(), cost = TextEditingController(), value = TextEditingController();
-  String category = 'Kas & Simpanan';
+Future<void> assetDialog(BuildContext context, VoidCallback changed, {Map<String, Object?>? existing}) async {
+  final name = TextEditingController(text: existing?['name'] as String? ?? '');
+  final cost = TextEditingController(text: existing == null ? '' : NumberFormat.decimalPattern('id_ID').format((existing['cost'] as num).round()));
+  final value = TextEditingController(text: existing == null ? '' : NumberFormat.decimalPattern('id_ID').format((existing['value'] as num).round()));
+  String category = existing?['category'] as String? ?? 'Kas & Simpanan';
   const categories = ['Emas', 'Saham', 'Reksadana', 'Obligasi & SBN', 'Crypto', 'Kas & Simpanan', 'Properti', 'Kendaraan', 'Aset Lainnya'];
   final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, localSet) => AlertDialog(
-    title: const Text('Tambah aset'),
+    title: Text(existing == null ? 'Tambah aset' : 'Edit aset'),
     content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      TextField(controller: name, decoration: const InputDecoration(labelText: 'Nama aset')),
+      TextField(controller: name, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Nama aset')),
       DropdownButtonFormField<String>(value: category, decoration: const InputDecoration(labelText: 'Kategori'), items: categories.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) => localSet(() => category = v ?? category)),
-      TextField(controller: cost, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Total modal (Rp)')),
-      TextField(controller: value, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Nilai saat ini (Rp)')),
+      TextField(controller: cost, keyboardType: TextInputType.number, inputFormatters: [RupiahInputFormatter()], decoration: const InputDecoration(labelText: 'Total modal (Rp)')),
+      TextField(controller: value, keyboardType: TextInputType.number, inputFormatters: [RupiahInputFormatter()], decoration: const InputDecoration(labelText: 'Nilai saat ini (Rp)')),
     ])),
     actions: [
       TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-      FilledButton(onPressed: () { if (name.text.trim().isNotEmpty && double.tryParse(value.text) != null) Navigator.pop(ctx, true); }, child: const Text('Simpan')),
+      FilledButton(onPressed: () {
+        final modal = parseNominal(cost.text);
+        final nilai = parseNominal(value.text);
+        if (name.text.trim().isEmpty || nilai <= 0) {
+          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nama dan nilai aset wajib diisi dengan benar.')));
+          return;
+        }
+        if (modal < 0) return;
+        Navigator.pop(ctx, true);
+      }, child: const Text('Simpan')),
     ],
   )));
-  if (ok == true) { await LocalDb.instance.addAsset(name.text.trim(), category, double.tryParse(cost.text) ?? 0, double.tryParse(value.text) ?? 0); changed(); }
+  if (ok == true) {
+    final modal = parseNominal(cost.text).toDouble();
+    final nilai = parseNominal(value.text).toDouble();
+    if (existing == null) {
+      await LocalDb.instance.addAsset(name.text.trim(), category, modal, nilai);
+    } else {
+      await LocalDb.instance.updateAsset(existing['id'] as int, name.text.trim(), category, modal, nilai);
+    }
+    changed();
+  }
   name.dispose(); cost.dispose(); value.dispose();
 }
 
-Future<void> debtDialog(BuildContext context, VoidCallback changed) async {
-  final name = TextEditingController(), amount = TextEditingController();
+Future<void> debtDialog(BuildContext context, VoidCallback changed, {Map<String, Object?>? existing}) async {
+  final name = TextEditingController(text: existing?['name'] as String? ?? '');
+  final amount = TextEditingController(text: existing == null ? '' : NumberFormat.decimalPattern('id_ID').format((existing['amount'] as num).round()));
   final ok = await showDialog<bool>(context: context, builder: (ctx) => AlertDialog(
-    title: const Text('Tambah utang'),
+    title: Text(existing == null ? 'Tambah utang' : 'Edit utang'),
     content: Column(mainAxisSize: MainAxisSize.min, children: [
-      TextField(controller: name, decoration: const InputDecoration(labelText: 'Nama utang / kewajiban')),
-      TextField(controller: amount, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah (Rp)')),
+      TextField(controller: name, textCapitalization: TextCapitalization.words, decoration: const InputDecoration(labelText: 'Nama utang / kewajiban')),
+      TextField(controller: amount, keyboardType: TextInputType.number, inputFormatters: [RupiahInputFormatter()], decoration: const InputDecoration(labelText: 'Jumlah (Rp)')),
     ]),
     actions: [
       TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-      FilledButton(onPressed: () { if (name.text.trim().isNotEmpty && double.tryParse(amount.text) != null) Navigator.pop(ctx, true); }, child: const Text('Simpan')),
+      FilledButton(onPressed: () {
+        if (name.text.trim().isEmpty || parseNominal(amount.text) <= 0) {
+          ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text('Nama dan jumlah utang wajib diisi dengan benar.')));
+          return;
+        }
+        Navigator.pop(ctx, true);
+      }, child: const Text('Simpan')),
     ],
   ));
-  if (ok == true) { await LocalDb.instance.addDebt(name.text.trim(), double.tryParse(amount.text) ?? 0); changed(); }
+  if (ok == true) {
+    final nominal = parseNominal(amount.text).toDouble();
+    if (existing == null) {
+      await LocalDb.instance.addDebt(name.text.trim(), nominal);
+    } else {
+      await LocalDb.instance.updateDebt(existing['id'] as int, name.text.trim(), nominal);
+    }
+    changed();
+  }
   name.dispose(); amount.dispose();
 }
