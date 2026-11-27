@@ -38,6 +38,21 @@ void main() {
       );
     });
 
+    test('menolak nilai unit, harga, atau biaya yang bukan angka terbatas', () {
+      expect(
+        () => calculatePosition([
+          PortfolioTransaction(type: 'buy', units: double.nan, unitPrice: 100),
+        ]),
+        throwsArgumentError,
+      );
+      expect(
+        () => calculatePosition([
+          PortfolioTransaction(type: 'buy', units: 1, unitPrice: double.infinity),
+        ]),
+        throwsArgumentError,
+      );
+    });
+
     test('mengurutkan transaksi berdasarkan tanggal', () {
       final position = calculatePosition([
         PortfolioTransaction(
