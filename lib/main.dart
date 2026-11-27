@@ -199,7 +199,7 @@ class LocalDb {
   Future<Map<String, Object?>> portfolioReport() async {
     final d = await db;
     final assets = await d.query('assets', orderBy: 'value DESC');
-    final transactions = await d.query('asset_transactions', orderBy: 'transaction_date DESC, id DESC');
+    final transactions = await d.rawQuery('SELECT t.*, a.name AS asset_name FROM asset_transactions t INNER JOIN assets a ON a.id = t.asset_id ORDER BY t.transaction_date DESC, t.id DESC');
     final grouped = <int, List<Map<String, Object?>>>{};
     for (final row in transactions) {
       final id = row['asset_id'] as int;
@@ -256,7 +256,7 @@ class LocalDb {
       'debts': totalDebts,
       'net_worth': totalValue - totalDebts,
       'assets': assetResults,
-      'recent_transactions': transactions.take(50).toList(),
+      'all_transactions': transactions,
     };
   }
 
@@ -458,25 +458,116 @@ class Metric extends StatelessWidget {
   ])));
 }
 
-class PortfolioReportPage extends StatelessWidget {
+class PortfolioReportPage extends StatefulWidget {
   const PortfolioReportPage({super.key});
+  @override
+  State<PortfolioReportPage> createState() => _PortfolioReportPageState();
+}
+
+class _PortfolioReportPageState extends State<PortfolioReportPage> {
+  int period = 0;
+
+  DateTime? get periodStart {
+    final now = DateTime.now();
+    if (period == 30) return now.subtract(const Duration(days: 30));
+    if (period == 90) return now.subtract(const Duration(days: 90));
+    if (period == 365) return DateTime(now.year, 1, 1);
+    return null;
+  }
+
+  List<Map<String, Object?>> filteredTransactions(List<Map<String, Object?>> rows) {
+    final start = periodStart;
+    if (start == null) return rows;
+    return rows.where((row) {
+      final date = DateTime.tryParse(row['transaction_date'] as String);
+      return date != null && !date.isBefore(start);
+    }).toList();
+  }
+
+  String csvCell(Object? value) {
+    final valueText = value?.toString() ?? '';
+    return '"\${valueText.replaceAll('"', '""')}"';
+  }
+
+  Future<void> exportCsv(BuildContext context, Map<String, Object?> report,
+      List<Map<String, Object?>> transactions) async {
+    final rows = <List<Object?>>[
+      ['LAPORAN ASETKU'],
+      ['Diekspor', DateFormat('dd-MM-yyyy HH:mm').format(DateTime.now())],
+      ['Periode transaksi', period == 0 ? 'Semua' : period == 365 ? 'Tahun berjalan' : '$period hari terakhir'],
+      [],
+      ['RINGKASAN KEKAYAAN (SEPANJANG WAKTU)'],
+      ['Total nilai aset', report['asset_value']],
+      ['Total modal aset', report['asset_cost']],
+      ['Total utang', report['debts']],
+      ['Kekayaan bersih', report['net_worth']],
+      ['Laba/rugi terealisasi', report['realized']],
+      ['Selisih nilai aset terhadap modal', report['unrealized']],
+      ['Biaya beli', report['buy_fees']],
+      ['Biaya jual', report['sell_fees']],
+      [],
+      ['RIWAYAT TRANSAKSI'],
+      ['Tanggal', 'Aset', 'Jenis', 'Unit', 'Harga per unit', 'Biaya', 'Nilai transaksi', 'Catatan'],
+    ];
+    for (final tx in transactions) {
+      final units = (tx['units'] as num).toDouble();
+      final price = (tx['unit_price'] as num).toDouble();
+      rows.add([tx['transaction_date'], tx['asset_name'], tx['type'] == 'buy' ? 'Beli' : 'Jual',
+        units, price, tx['fee'], units * price, tx['note']]);
+    }
+    final csv = rows.map((row) => row.map(csvCell).join(';')).join('\r\n');
+    final bytes = Uint8List.fromList(utf8.encode('\uFEFF$csv'));
+    try {
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Ekspor laporan Asetku',
+        fileName: 'asetku_laporan_\${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv',
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+        bytes: bytes,
+      );
+      if (path != null && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Laporan CSV berhasil disimpan.')));
+      }
+    } catch (e) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal mengekspor laporan: $e')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<Map<String, Object?>>(
     future: LocalDb.instance.portfolioReport(),
     builder: (context, snapshot) {
-      if (snapshot.hasError) return Center(child: Text('Gagal memuat laporan: ${snapshot.error}'));
+      if (snapshot.hasError) return Center(child: Text('Gagal memuat laporan: \${snapshot.error}'));
       if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
       final r = snapshot.data!;
       final assetRows = r['assets'] as List<Map<String, Object?>>;
-      final recent = r['recent_transactions'] as List<Map<String, Object?>>;
+      final allTransactions = r['all_transactions'] as List<Map<String, Object?>>;
+      final recent = filteredTransactions(allTransactions);
       final realized = (r['realized'] as num).toDouble();
       final unrealized = (r['unrealized'] as num).toDouble();
       final fees = (r['fees'] as num).toDouble();
       return ListView(padding: const EdgeInsets.all(16), children: [
         const Text('Laporan portofolio', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
         const SizedBox(height: 4),
-        Text('Ringkasan seluruh data yang tersimpan di perangkat', style: TextStyle(color: Colors.grey.shade700)),
+        Text('Ringkasan kinerja sepanjang waktu; filter berlaku untuk daftar dan ekspor transaksi.', style: TextStyle(color: Colors.grey.shade700)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: DropdownButtonFormField<int>(
+            value: period,
+            decoration: const InputDecoration(labelText: 'Periode transaksi', border: OutlineInputBorder(), isDense: true),
+            items: const [
+              DropdownMenuItem(value: 0, child: Text('Semua transaksi')),
+              DropdownMenuItem(value: 30, child: Text('30 hari terakhir')),
+              DropdownMenuItem(value: 90, child: Text('90 hari terakhir')),
+              DropdownMenuItem(value: 365, child: Text('Tahun berjalan')),
+            ],
+            onChanged: (value) => setState(() => period = value ?? 0),
+          )),
+          const SizedBox(width: 8),
+          IconButton.filledTonal(tooltip: 'Ekspor CSV',
+            onPressed: () => exportCsv(context, r, recent),
+            icon: const Icon(Icons.file_download_outlined)),
+        ]),
         const SizedBox(height: 14),
         Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Kekayaan bersih', style: TextStyle(color: Colors.black54)),
@@ -488,12 +579,12 @@ class PortfolioReportPage extends StatelessWidget {
           positionLine('Total utang', rupiah(r['debts'] as num)),
         ]))),
         const SizedBox(height: 10),
-        const Text('Kinerja investasi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const Text('Kinerja investasi • sepanjang waktu', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         Row(children: [
           Expanded(child: Metric(title: 'Laba/rugi terealisasi', value: rupiah(realized), icon: Icons.check_circle_outline)),
           const SizedBox(width: 10),
-          Expanded(child: Metric(title: 'Laba/rugi belum terealisasi', value: rupiah(unrealized), icon: Icons.trending_up)),
+          Expanded(child: Metric(title: 'Selisih nilai aset terhadap modal', value: rupiah(unrealized), icon: Icons.trending_up)),
         ]),
         const SizedBox(height: 8),
         Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: [
@@ -505,34 +596,36 @@ class PortfolioReportPage extends StatelessWidget {
           positionLine('Jumlah transaksi jual', (r['sell_count'] as int).toString()),
         ]))),
         const SizedBox(height: 16),
-        const Text('Kinerja per aset', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const Text('Kinerja per aset • sepanjang waktu', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         if (assetRows.isEmpty)
           const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Belum ada transaksi investasi.')))
         else
           ...assetRows.map((a) => Card(child: ListTile(
             title: Text(a['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: Text('${a['category']} • ${(a['units'] as num).toStringAsFixed(6)} unit'),
+            subtitle: Text('\${a['category']} • \${(a['units'] as num).toStringAsFixed(6)} unit'),
             trailing: Text(rupiah(a['realized'] as num), style: TextStyle(fontWeight: FontWeight.w700, color: (a['realized'] as num) >= 0 ? Colors.green : Colors.red)),
           ))),
         const SizedBox(height: 16),
-        const Text('Transaksi terbaru', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        Text('Transaksi (\${recent.length})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         if (recent.isEmpty)
-          const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Belum ada riwayat transaksi.')))
+          const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Tidak ada transaksi pada periode ini.')))
         else
-          ...recent.map((tx) {
+          ...recent.take(100).map((tx) {
             final buy = tx['type'] == 'buy';
             final date = DateTime.tryParse(tx['transaction_date'] as String);
             final amount = (tx['units'] as num) * (tx['unit_price'] as num);
             return Card(child: ListTile(
               dense: true,
               leading: Icon(buy ? Icons.south_west : Icons.north_east, color: buy ? Colors.green : Colors.red),
-              title: Text('${buy ? 'Beli' : 'Jual'} • ${tx['units']} unit'),
-              subtitle: Text('${date == null ? '-' : DateFormat('dd MMM yyyy').format(date)} • ${tx['note']}'),
+              title: Text('\${buy ? 'Beli' : 'Jual'} • \${tx['asset_name']} • \${tx['units']} unit'),
+              subtitle: Text('\${date == null ? '-' : DateFormat('dd MMM yyyy').format(date)} • \${tx['note']}'),
               trailing: Text(rupiah(amount), style: const TextStyle(fontWeight: FontWeight.w700)),
             ));
           }),
+        if (recent.length > 100)
+          Padding(padding: const EdgeInsets.all(8), child: Text('Menampilkan 100 dari \${recent.length} transaksi. Ekspor CSV memuat semuanya.')),
         const SizedBox(height: 80),
       ]);
     },
