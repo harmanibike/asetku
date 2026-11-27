@@ -32,6 +32,9 @@ Emas, saham, reksadana, obligasi & SBN, crypto, kas & simpanan, properti, kendar
 - [x] Penyimpanan harga pasar terakhir per aset investasi, termasuk sumber dan waktu pembaruan.
 - [x] Pembaruan harga manual dengan perhitungan nilai posisi berdasarkan jumlah unit.
 - [x] Harga pasar tersimpan di backup JSON dan ikut dipulihkan.
+- [x] Laporan portofolio sepanjang waktu untuk kekayaan, biaya, dan kinerja investasi.
+- [x] Filter riwayat transaksi: semua, 30 hari, 90 hari, dan tahun berjalan.
+- [x] Ekspor laporan CSV UTF-8 dengan BOM dan pemisah titik koma agar mudah dibuka di Excel/Google Sheets.
 - [ ] Integrasi otomatis harga pasar dan kurs dengan cache serta fallback manual.
 - [ ] Uji perangkat Android.
 
@@ -54,6 +57,8 @@ APK release dari workflow belum ditandatangani dengan keystore produksi; gunakan
 - Dashboard merangkum alokasi aset per kategori dan grafik riwayat kekayaan bersih; snapshot disimpan maksimal sekali per hari saat ringkasan dibuka.
 - Detail investasi dapat dibuka dari daftar aset investasi; transaksi beli/jual tersimpan lokal dan riwayatnya dapat dilihat kembali.
 - Harga pasar manual disimpan per aset beserta sumber dan waktu pembaruan; untuk posisi yang memiliki unit transaksi, nilai aset dihitung dari unit × harga terakhir.
+- Laporan portofolio menampilkan ringkasan sepanjang waktu. Filter periode hanya membatasi daftar dan ekspor transaksi; perhitungan modal dan laba/rugi historis tetap memakai seluruh riwayat agar harga rata-rata tertimbang tidak berubah akibat filter.
+- Ekspor laporan menggunakan CSV UTF-8 dengan BOM dan delimiter titik koma, berisi ringkasan kekayaan sepanjang waktu serta seluruh transaksi sesuai filter yang dipilih.
 - Harga pasar ikut masuk ke backup JSON; backup versi 1 dan 2 tetap dapat dipulihkan.
 - Migrasi database versi 1 ke versi 2 menambahkan tabel transaksi, dan versi 2 ke versi 3 menambahkan penyimpanan harga pasar tanpa menghapus data lama.
 - Nominal input ditampilkan dengan pemisah ribuan Indonesia.
