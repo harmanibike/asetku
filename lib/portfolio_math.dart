@@ -46,8 +46,13 @@ PortfolioPosition calculatePosition(
   var sellFees = 0.0;
 
   for (final tx in ordered) {
-    if (tx.units <= 0 || tx.unitPrice < 0 || tx.fee < 0) {
-      throw ArgumentError('Unit harus positif; harga dan biaya tidak boleh negatif.');
+    if (!tx.units.isFinite ||
+        !tx.unitPrice.isFinite ||
+        !tx.fee.isFinite ||
+        tx.units <= 0 ||
+        tx.unitPrice < 0 ||
+        tx.fee < 0) {
+      throw ArgumentError('Unit harus positif; harga dan biaya harus berupa angka valid dan tidak boleh negatif.');
     }
     if (tx.type == 'buy') {
       units += tx.units;
