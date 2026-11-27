@@ -117,11 +117,19 @@ class LocalDb {
     }
     for (final row in transactions) {
       if (row['id'] is! num || row['asset_id'] is! num ||
-          row['type'] is! String || row['units'] is! num ||
-          row['unit_price'] is! num || row['fee'] is! num ||
+          row['type'] is! String || !['buy', 'sell'].contains(row['type']) ||
+          row['units'] is! num || (row['units'] as num) <= 0 ||
+          row['unit_price'] is! num || (row['unit_price'] as num) < 0 ||
+          row['fee'] is! num || (row['fee'] as num) < 0 ||
           row['transaction_date'] is! String ||
           row['note'] is! String || row['created_at'] is! String) {
         throw const FormatException('Isi riwayat transaksi tidak lengkap.');
+      }
+    }
+    final assetIds = assets.map((row) => row['id']).toSet();
+    for (final row in transactions) {
+      if (!assetIds.contains(row['asset_id'])) {
+        throw const FormatException('Riwayat transaksi merujuk aset yang tidak tersedia.');
       }
     }
     final d = await db;
@@ -151,9 +159,15 @@ class LocalDb {
   }
 
   Future<List<Map<String, Object?>>> netWorthHistory() async {
-    await totals();
     final d = await db;
     return d.query('snapshots', orderBy: 'recorded_at ASC', limit: 30);
+  }
+
+  Future<List<Object>> dashboardData() async {
+    final summary = await totals();
+    final categories = await allocation();
+    final history = await netWorthHistory();
+    return <Object>[summary, categories, history];
   }
 
   Future<Map<String, double>> totals() async {
@@ -218,11 +232,7 @@ class Dashboard extends StatelessWidget {
   final VoidCallback changed;
   @override
   Widget build(BuildContext context) => FutureBuilder<List<Object>>(
-    future: Future.wait<Object>([
-      LocalDb.instance.totals(),
-      LocalDb.instance.allocation(),
-      LocalDb.instance.netWorthHistory(),
-    ]),
+    future: LocalDb.instance.dashboardData(),
     builder: (context, snapshot) {
       if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
       final t = snapshot.data![0] as Map<String, double>;
