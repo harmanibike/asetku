@@ -441,7 +441,7 @@ class _AssetDetailPageState extends State<AssetDetailPage> {
     final id = widget.asset['id'] as int;
     return Scaffold(appBar: AppBar(title: Text(widget.asset['name'] as String)),
       floatingActionButton: FloatingActionButton.extended(onPressed: () async { await transactionDialog(context, id); if (mounted) setState(() => revision++); widget.changed(); }, icon: const Icon(Icons.add), label: const Text('Transaksi')),
-      body: FutureBuilder<List<Object>>(key: ValueKey(revision), future: Future.wait<Object>([LocalDb.instance.positionForAsset(id), LocalDb.instance.transactionsForAsset(id), LocalDb.instance.marketPriceForAsset(id)]), builder: (context, s) {
+      body: FutureBuilder<List<Object?>>(key: ValueKey(revision), future: Future.wait<Object?>([LocalDb.instance.positionForAsset(id), LocalDb.instance.transactionsForAsset(id), LocalDb.instance.marketPriceForAsset(id)]), builder: (context, s) {
         if (!s.hasData) return const Center(child: CircularProgressIndicator());
         final p = s.data![0] as PortfolioPosition; final rows = s.data![1] as List<Map<String, Object?>>; final market = s.data![2] as Map<String, Object?>?;
         return ListView(padding: const EdgeInsets.all(16), children: [
