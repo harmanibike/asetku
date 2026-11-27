@@ -22,7 +22,10 @@ Emas, saham, reksadana, obligasi & SBN, crypto, kas & simpanan, properti, kendar
 - [x] Edit dan hapus data aset/utang dengan konfirmasi.
 - [x] Fondasi perhitungan transaksi beli/jual dengan harga rata-rata tertimbang.
 - [x] Perhitungan biaya transaksi, modal tersisa, laba/rugi terealisasi, dan validasi unit penjualan.
-- [ ] Form transaksi dan penyimpanan transaksi ke database SQLite.
+- [x] Form transaksi beli/jual untuk emas, saham, reksadana, obligasi/SBN, dan crypto.
+- [x] Penyimpanan transaksi di SQLite dengan migrasi aman dari database versi 1.
+- [x] Riwayat transaksi, jumlah unit, harga rata-rata, modal tersisa, dan laba/rugi terealisasi.
+- [x] Validasi agar transaksi jual tidak melebihi unit yang dimiliki.
 - [ ] Backup/restore JSON.
 - [ ] Grafik riwayat dan alokasi portofolio.
 - [ ] Integrasi harga pasar dan kurs dengan fallback manual.
@@ -44,6 +47,8 @@ APK release dari workflow belum ditandatangani dengan keystore produksi; gunakan
 
 ## Perkembangan lanjutan
 - Form aset dan utang mendukung mode tambah serta edit.
+- Detail investasi dapat dibuka dari daftar aset investasi; transaksi beli/jual tersimpan lokal dan riwayatnya dapat dilihat kembali.
+- Migrasi database versi 1 ke versi 2 menambahkan tabel transaksi tanpa menghapus data aset/utang yang sudah ada.
 - Nominal input ditampilkan dengan pemisah ribuan Indonesia.
 - Data hanya dapat dihapus setelah konfirmasi.
 - Pengujian unit mencakup pembacaan nominal berformat Rupiah.
