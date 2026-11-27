@@ -214,6 +214,10 @@ class LocalDb {
     for (final asset in assets) {
       final id = asset['id'] as int;
       final rows = grouped[id] ?? <Map<String, Object?>>[];
+      rows.sort((a, b) {
+        final byDate = (a['transaction_date'] as String).compareTo(b['transaction_date'] as String);
+        return byDate != 0 ? byDate : (a['id'] as int).compareTo(b['id'] as int);
+      });
       final position = calculatePosition(rows.map((r) => PortfolioTransaction(
         type: r['type'] as String,
         units: (r['units'] as num).toDouble(),
