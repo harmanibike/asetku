@@ -486,7 +486,7 @@ class _PortfolioReportPageState extends State<PortfolioReportPage> {
 
   String csvCell(Object? value) {
     final valueText = value?.toString() ?? '';
-    return '"\${valueText.replaceAll('"', '""')}"';
+    return '"${valueText.replaceAll('"', '""')}"';
   }
 
   Future<void> exportCsv(BuildContext context, Map<String, Object?> report,
@@ -520,7 +520,7 @@ class _PortfolioReportPageState extends State<PortfolioReportPage> {
     try {
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Ekspor laporan Asetku',
-        fileName: 'asetku_laporan_\${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv',
+        fileName: 'asetku_laporan_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.csv',
         type: FileType.custom,
         allowedExtensions: ['csv'],
         bytes: bytes,
@@ -537,7 +537,7 @@ class _PortfolioReportPageState extends State<PortfolioReportPage> {
   Widget build(BuildContext context) => FutureBuilder<Map<String, Object?>>(
     future: LocalDb.instance.portfolioReport(),
     builder: (context, snapshot) {
-      if (snapshot.hasError) return Center(child: Text('Gagal memuat laporan: \${snapshot.error}'));
+      if (snapshot.hasError) return Center(child: Text('Gagal memuat laporan: ${snapshot.error}'));
       if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
       final r = snapshot.data!;
       final assetRows = r['assets'] as List<Map<String, Object?>>;
@@ -603,11 +603,11 @@ class _PortfolioReportPageState extends State<PortfolioReportPage> {
         else
           ...assetRows.map((a) => Card(child: ListTile(
             title: Text(a['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: Text('\${a['category']} • \${(a['units'] as num).toStringAsFixed(6)} unit'),
+            subtitle: Text('${a['category']} • ${(a['units'] as num).toStringAsFixed(6)} unit'),
             trailing: Text(rupiah(a['realized'] as num), style: TextStyle(fontWeight: FontWeight.w700, color: (a['realized'] as num) >= 0 ? Colors.green : Colors.red)),
           ))),
         const SizedBox(height: 16),
-        Text('Transaksi (\${recent.length})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        Text('Transaksi (${recent.length})', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         if (recent.isEmpty)
           const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Tidak ada transaksi pada periode ini.')))
@@ -619,13 +619,13 @@ class _PortfolioReportPageState extends State<PortfolioReportPage> {
             return Card(child: ListTile(
               dense: true,
               leading: Icon(buy ? Icons.south_west : Icons.north_east, color: buy ? Colors.green : Colors.red),
-              title: Text('\${buy ? 'Beli' : 'Jual'} • \${tx['asset_name']} • \${tx['units']} unit'),
-              subtitle: Text('\${date == null ? '-' : DateFormat('dd MMM yyyy').format(date)} • \${tx['note']}'),
+              title: Text('${buy ? 'Beli' : 'Jual'} • ${tx['asset_name']} • ${tx['units']} unit'),
+              subtitle: Text('${date == null ? '-' : DateFormat('dd MMM yyyy').format(date)} • ${tx['note']}'),
               trailing: Text(rupiah(amount), style: const TextStyle(fontWeight: FontWeight.w700)),
             ));
           }),
         if (recent.length > 100)
-          Padding(padding: const EdgeInsets.all(8), child: Text('Menampilkan 100 dari \${recent.length} transaksi. Ekspor CSV memuat semuanya.')),
+          Padding(padding: const EdgeInsets.all(8), child: Text('Menampilkan 100 dari ${recent.length} transaksi. Ekspor CSV memuat semuanya.')),
         const SizedBox(height: 80),
       ]);
     },
