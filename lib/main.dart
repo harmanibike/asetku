@@ -54,16 +54,35 @@ class LocalDb {
   }
   Future<void> addTransaction(int assetId, PortfolioTransaction tx, {String note = ''}) async {
     final d = await db;
-    await d.insert('asset_transactions', {'asset_id': assetId, 'type': tx.type, 'units': tx.units, 'unit_price': tx.unitPrice, 'fee': tx.fee, 'transaction_date': (tx.date ?? DateTime.now()).toIso8601String(), 'note': note, 'created_at': DateTime.now().toIso8601String()});
-    final position = await positionForAsset(assetId);
-    final market = await d.query('market_prices', where: 'asset_id = ?', whereArgs: [assetId], limit: 1);
-    final updates = <String, Object?>{'cost': position.costBasis};
-    if (market.isNotEmpty && position.units > 0) updates['value'] = position.units * (market.first['unit_price'] as num).toDouble();
-    await d.update('assets', updates, where: 'id = ?', whereArgs: [assetId]);
+    await d.transaction((txn) async {
+      final asset = await txn.query('assets', columns: ['id'], where: 'id = ?', whereArgs: [assetId], limit: 1);
+      if (asset.isEmpty) throw ArgumentError('Aset tidak ditemukan.');
+      final rows = await txn.query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date ASC, id ASC');
+      final current = calculatePosition(rows.map((r) => PortfolioTransaction(type: r['type'] as String, units: (r['units'] as num).toDouble(), unitPrice: (r['unit_price'] as num).toDouble(), fee: (r['fee'] as num).toDouble(), date: DateTime.parse(r['transaction_date'] as String))));
+      if (tx.type == 'sell' && tx.units > current.units + 1e-9) throw ArgumentError('Jumlah jual melebihi unit tersedia: ${current.units}');
+      await txn.insert('asset_transactions', {'asset_id': assetId, 'type': tx.type, 'units': tx.units, 'unit_price': tx.unitPrice, 'fee': tx.fee, 'transaction_date': (tx.date ?? DateTime.now()).toIso8601String(), 'note': note, 'created_at': DateTime.now().toIso8601String()});
+      final updatedRows = await txn.query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date ASC, id ASC');
+      final position = calculatePosition(updatedRows.map((r) => PortfolioTransaction(type: r['type'] as String, units: (r['units'] as num).toDouble(), unitPrice: (r['unit_price'] as num).toDouble(), fee: (r['fee'] as num).toDouble(), date: DateTime.parse(r['transaction_date'] as String))));
+      final market = await txn.query('market_prices', where: 'asset_id = ?', whereArgs: [assetId], limit: 1);
+      final updates = <String, Object?>{'cost': position.costBasis};
+      if (market.isNotEmpty) updates['value'] = position.units > 0 ? position.units * (market.first['unit_price'] as num).toDouble() : 0;
+      await txn.update('assets', updates, where: 'id = ?', whereArgs: [assetId]);
+    });
   }
   Future<List<Map<String, Object?>>> transactionsForAsset(int assetId) async => (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date DESC, id DESC');
   Future<Map<String, Object?>?> marketPriceForAsset(int assetId) async { final rows = await (await db).query('market_prices', where: 'asset_id = ?', whereArgs: [assetId], limit: 1); return rows.isEmpty ? null : rows.first; }
-  Future<void> saveMarketPrice(int assetId, double price, {String source = 'manual'}) async { final d = await db; await d.insert('market_prices', {'asset_id': assetId, 'unit_price': price, 'source': source, 'updated_at': DateTime.now().toIso8601String()}, conflictAlgorithm: ConflictAlgorithm.replace); final position = await positionForAsset(assetId); if (position.units > 0) await d.update('assets', {'value': position.units * price}, where: 'id = ?', whereArgs: [assetId]); }
+  Future<void> saveMarketPrice(int assetId, double price, {String source = 'manual'}) async {
+    if (!price.isFinite || price < 0) throw ArgumentError('Harga pasar tidak valid.');
+    final d = await db;
+    await d.transaction((txn) async {
+      final asset = await txn.query('assets', columns: ['id'], where: 'id = ?', whereArgs: [assetId], limit: 1);
+      if (asset.isEmpty) throw ArgumentError('Aset tidak ditemukan.');
+      await txn.insert('market_prices', {'asset_id': assetId, 'unit_price': price, 'source': source, 'updated_at': DateTime.now().toIso8601String()}, conflictAlgorithm: ConflictAlgorithm.replace);
+      final rows = await txn.query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date ASC, id ASC');
+      final position = calculatePosition(rows.map((r) => PortfolioTransaction(type: r['type'] as String, units: (r['units'] as num).toDouble(), unitPrice: (r['unit_price'] as num).toDouble(), fee: (r['fee'] as num).toDouble(), date: DateTime.parse(r['transaction_date'] as String))));
+      if (rows.isNotEmpty) await txn.update('assets', {'value': position.units > 0 ? position.units * price : 0}, where: 'id = ?', whereArgs: [assetId]);
+    });
+  }
   Future<PortfolioPosition> positionForAsset(int assetId) async {
     final rows = await (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date ASC, id ASC');
     return calculatePosition(rows.map((r) => PortfolioTransaction(type: r['type'] as String, units: (r['units'] as num).toDouble(), unitPrice: (r['unit_price'] as num).toDouble(), fee: (r['fee'] as num).toDouble(), date: DateTime.parse(r['transaction_date'] as String))));
@@ -111,6 +130,12 @@ class LocalDb {
     final snapshots = rows('snapshots');
     final transactions = rows('asset_transactions');
     final marketPrices = rows('market_prices');
+    for (final row in snapshots) {
+      if (row['id'] is! num || row['assets'] is! num || row['debts'] is! num || row['net_worth'] is! num || row['recorded_at'] is! String) {
+        throw const FormatException('Isi riwayat kekayaan tidak valid.');
+      }
+    }
+    final marketPriceAssetIds = <Object?>{};
     for (final row in assets) {
       if (row['id'] is! num || row['name'] is! String ||
           row['category'] is! String || row['cost'] is! num ||
@@ -142,8 +167,8 @@ class LocalDb {
       }
     }
     for (final row in marketPrices) {
-      if (row['id'] is! num || row['asset_id'] is! num || !assetIds.contains(row['asset_id']) || row['unit_price'] is! num || (row['unit_price'] as num) < 0 || row['source'] is! String || row['updated_at'] is! String) {
-        throw const FormatException('Data harga pasar tidak valid.');
+      if (row['id'] is! num || row['asset_id'] is! num || !assetIds.contains(row['asset_id']) || row['unit_price'] is! num || (row['unit_price'] as num) < 0 || row['source'] is! String || row['updated_at'] is! String || !marketPriceAssetIds.add(row['asset_id'])) {
+        throw const FormatException('Data harga pasar tidak valid atau duplikat.');
       }
     }
     final d = await db;
