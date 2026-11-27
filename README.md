@@ -7,7 +7,7 @@ Aplikasi Android untuk mencatat aset, kewajiban, dan kekayaan bersih pribadi.
 - Offline-first; data utama disimpan di SQLite pada perangkat.
 - Rupiah (IDR) sebagai mata uang utama.
 - Harga pasar otomatis bersifat opsional; input manual tetap tersedia.
-- Backup dan pemulihan data lokal menjadi fitur tahap berikutnya.
+- Backup dan pemulihan data lokal tersedia melalui file JSON; tidak memerlukan akun atau server.
 
 ## Kategori aset
 Emas, saham, reksadana, obligasi & SBN, crypto, kas & simpanan, properti, kendaraan, dan aset lainnya.
@@ -26,10 +26,12 @@ Emas, saham, reksadana, obligasi & SBN, crypto, kas & simpanan, properti, kendar
 - [x] Penyimpanan transaksi di SQLite dengan migrasi aman dari database versi 1.
 - [x] Riwayat transaksi, jumlah unit, harga rata-rata, modal tersisa, dan laba/rugi terealisasi.
 - [x] Validasi agar transaksi jual tidak melebihi unit yang dimiliki.
-- [ ] Backup/restore JSON.
+- [x] Backup/restore JSON lokal dengan validasi format dan konfirmasi sebelum mengganti data.
 - [ ] Grafik riwayat dan alokasi portofolio.
 - [ ] Integrasi harga pasar dan kurs dengan fallback manual.
-- [ ] Uji build dan perangkat Android.
+- [ ] Grafik riwayat dan alokasi portofolio.
+- [ ] Integrasi harga pasar dan kurs dengan fallback manual.
+- [ ] Uji perangkat Android.
 
 ## Build
 Workflow berjalan pada push ke `main`, pull request, atau manual melalui tab **Actions**. APK diunggah sebagai artifact `asetku-release-apk`.
