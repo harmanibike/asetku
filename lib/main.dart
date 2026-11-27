@@ -196,6 +196,70 @@ class LocalDb {
     });
   }
 
+  Future<Map<String, Object?>> portfolioReport() async {
+    final d = await db;
+    final assets = await d.query('assets', orderBy: 'value DESC');
+    final transactions = await d.query('asset_transactions', orderBy: 'transaction_date DESC, id DESC');
+    final grouped = <int, List<Map<String, Object?>>>{};
+    for (final row in transactions) {
+      final id = row['asset_id'] as int;
+      grouped.putIfAbsent(id, () => []).add(row);
+    }
+    var realized = 0.0;
+    var buyFees = 0.0;
+    var sellFees = 0.0;
+    var buyCount = 0;
+    var sellCount = 0;
+    final assetResults = <Map<String, Object?>>[];
+    for (final asset in assets) {
+      final id = asset['id'] as int;
+      final rows = grouped[id] ?? <Map<String, Object?>>[];
+      final position = calculatePosition(rows.map((r) => PortfolioTransaction(
+        type: r['type'] as String,
+        units: (r['units'] as num).toDouble(),
+        unitPrice: (r['unit_price'] as num).toDouble(),
+        fee: (r['fee'] as num).toDouble(),
+        date: DateTime.parse(r['transaction_date'] as String),
+      )));
+      realized += position.realizedProfitLoss;
+      buyFees += position.totalBuyFees;
+      sellFees += position.totalSellFees;
+      buyCount += rows.where((r) => r['type'] == 'buy').length;
+      sellCount += rows.where((r) => r['type'] == 'sell').length;
+      if (rows.isNotEmpty) {
+        assetResults.add({
+          'id': id,
+          'name': asset['name'],
+          'category': asset['category'],
+          'realized': position.realizedProfitLoss,
+          'units': position.units,
+          'cost': position.costBasis,
+          'value': (asset['value'] as num).toDouble(),
+        });
+      }
+    }
+    final totalValue = assets.fold<double>(0, (sum, r) => sum + (r['value'] as num).toDouble());
+    final totalCost = assets.fold<double>(0, (sum, r) => sum + (r['cost'] as num).toDouble());
+    final debts = await d.rawQuery('SELECT COALESCE(SUM(amount),0) AS total FROM debts');
+    final totalDebts = (debts.first['total'] as num).toDouble();
+    return {
+      'asset_value': totalValue,
+      'asset_cost': totalCost,
+      'unrealized': totalValue - totalCost,
+      'realized': realized,
+      'buy_fees': buyFees,
+      'sell_fees': sellFees,
+      'fees': buyFees + sellFees,
+      'buy_count': buyCount,
+      'sell_count': sellCount,
+      'transaction_count': buyCount + sellCount,
+      'debts': totalDebts,
+      'net_worth': totalValue - totalDebts,
+      'assets': assetResults,
+      'recent_transactions': transactions.take(50).toList(),
+    };
+  }
+
   Future<List<Map<String, Object?>>> allocation() async {
     final d = await db;
     return d.rawQuery('SELECT category, SUM(value) AS total FROM assets GROUP BY category HAVING SUM(value) > 0 ORDER BY total DESC');
@@ -255,6 +319,7 @@ class _MainScreenState extends State<MainScreen> {
       Dashboard(key: ValueKey('home$refresh'), changed: changed),
       Records(key: ValueKey('assets$refresh'), table: 'assets', changed: changed),
       Records(key: ValueKey('debts$refresh'), table: 'debts', changed: changed),
+      const PortfolioReportPage(),
       const SettingsPage(),
     ];
     return Scaffold(
@@ -264,6 +329,7 @@ class _MainScreenState extends State<MainScreen> {
         NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Ringkasan'),
         NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Aset'),
         NavigationDestination(icon: Icon(Icons.credit_card_outlined), label: 'Utang'),
+        NavigationDestination(icon: Icon(Icons.assessment_outlined), label: 'Laporan'),
         NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Pengaturan'),
       ]),
     );
@@ -390,6 +456,87 @@ class Metric extends StatelessWidget {
       const SizedBox(height: 4), Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
     ])),
   ])));
+}
+
+class PortfolioReportPage extends StatelessWidget {
+  const PortfolioReportPage({super.key});
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Map<String, Object?>>(
+    future: LocalDb.instance.portfolioReport(),
+    builder: (context, snapshot) {
+      if (snapshot.hasError) return Center(child: Text('Gagal memuat laporan: ${snapshot.error}'));
+      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+      final r = snapshot.data!;
+      final assetRows = r['assets'] as List<Map<String, Object?>>;
+      final recent = r['recent_transactions'] as List<Map<String, Object?>>;
+      final realized = (r['realized'] as num).toDouble();
+      final unrealized = (r['unrealized'] as num).toDouble();
+      final fees = (r['fees'] as num).toDouble();
+      return ListView(padding: const EdgeInsets.all(16), children: [
+        const Text('Laporan portofolio', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 4),
+        Text('Ringkasan seluruh data yang tersimpan di perangkat', style: TextStyle(color: Colors.grey.shade700)),
+        const SizedBox(height: 14),
+        Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Kekayaan bersih', style: TextStyle(color: Colors.black54)),
+          const SizedBox(height: 5),
+          Text(rupiah(r['net_worth'] as num), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: Color(0xFF1769AA))),
+          const Divider(height: 22),
+          positionLine('Total nilai aset', rupiah(r['asset_value'] as num)),
+          positionLine('Total modal aset', rupiah(r['asset_cost'] as num)),
+          positionLine('Total utang', rupiah(r['debts'] as num)),
+        ]))),
+        const SizedBox(height: 10),
+        const Text('Kinerja investasi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        Row(children: [
+          Expanded(child: Metric(title: 'Laba/rugi terealisasi', value: rupiah(realized), icon: Icons.check_circle_outline)),
+          const SizedBox(width: 10),
+          Expanded(child: Metric(title: 'Laba/rugi belum terealisasi', value: rupiah(unrealized), icon: Icons.trending_up)),
+        ]),
+        const SizedBox(height: 8),
+        Card(child: Padding(padding: const EdgeInsets.all(14), child: Column(children: [
+          positionLine('Biaya beli', rupiah(r['buy_fees'] as num)),
+          positionLine('Biaya jual', rupiah(r['sell_fees'] as num)),
+          const Divider(),
+          positionLine('Total biaya transaksi', rupiah(fees)),
+          positionLine('Jumlah transaksi beli', (r['buy_count'] as int).toString()),
+          positionLine('Jumlah transaksi jual', (r['sell_count'] as int).toString()),
+        ]))),
+        const SizedBox(height: 16),
+        const Text('Kinerja per aset', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        if (assetRows.isEmpty)
+          const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Belum ada transaksi investasi.')))
+        else
+          ...assetRows.map((a) => Card(child: ListTile(
+            title: Text(a['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
+            subtitle: Text('${a['category']} • ${(a['units'] as num).toStringAsFixed(6)} unit'),
+            trailing: Text(rupiah(a['realized'] as num), style: TextStyle(fontWeight: FontWeight.w700, color: (a['realized'] as num) >= 0 ? Colors.green : Colors.red)),
+          ))),
+        const SizedBox(height: 16),
+        const Text('Transaksi terbaru', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        if (recent.isEmpty)
+          const Card(child: Padding(padding: EdgeInsets.all(14), child: Text('Belum ada riwayat transaksi.')))
+        else
+          ...recent.map((tx) {
+            final buy = tx['type'] == 'buy';
+            final date = DateTime.tryParse(tx['transaction_date'] as String);
+            final amount = (tx['units'] as num) * (tx['unit_price'] as num);
+            return Card(child: ListTile(
+              dense: true,
+              leading: Icon(buy ? Icons.south_west : Icons.north_east, color: buy ? Colors.green : Colors.red),
+              title: Text('${buy ? 'Beli' : 'Jual'} • ${tx['units']} unit'),
+              subtitle: Text('${date == null ? '-' : DateFormat('dd MMM yyyy').format(date)} • ${tx['note']}'),
+              trailing: Text(rupiah(amount), style: const TextStyle(fontWeight: FontWeight.w700)),
+            ));
+          }),
+        const SizedBox(height: 80),
+      ]);
+    },
+  );
 }
 
 class Records extends StatelessWidget {
