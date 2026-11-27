@@ -27,9 +27,8 @@ Emas, saham, reksadana, obligasi & SBN, crypto, kas & simpanan, properti, kendar
 - [x] Riwayat transaksi, jumlah unit, harga rata-rata, modal tersisa, dan laba/rugi terealisasi.
 - [x] Validasi agar transaksi jual tidak melebihi unit yang dimiliki.
 - [x] Backup/restore JSON lokal dengan validasi format dan konfirmasi sebelum mengganti data.
-- [ ] Grafik riwayat dan alokasi portofolio.
-- [ ] Integrasi harga pasar dan kurs dengan fallback manual.
-- [ ] Grafik riwayat dan alokasi portofolio.
+- [x] Ringkasan alokasi aset per kategori dengan proporsi nilai.
+- [x] Snapshot kekayaan bersih harian dan grafik riwayat hingga 30 catatan.
 - [ ] Integrasi harga pasar dan kurs dengan fallback manual.
 - [ ] Uji perangkat Android.
 
@@ -49,6 +48,7 @@ APK release dari workflow belum ditandatangani dengan keystore produksi; gunakan
 
 ## Perkembangan lanjutan
 - Form aset dan utang mendukung mode tambah serta edit.
+- Dashboard merangkum alokasi aset per kategori dan grafik riwayat kekayaan bersih; snapshot disimpan maksimal sekali per hari saat ringkasan dibuka.
 - Detail investasi dapat dibuka dari daftar aset investasi; transaksi beli/jual tersimpan lokal dan riwayatnya dapat dilihat kembali.
 - Migrasi database versi 1 ke versi 2 menambahkan tabel transaksi tanpa menghapus data aset/utang yang sudah ada.
 - Nominal input ditampilkan dengan pemisah ribuan Indonesia.
