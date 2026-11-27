@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
@@ -64,6 +67,84 @@ class LocalDb {
     if (table == 'assets') { await d.delete('asset_transactions', where: 'asset_id = ?', whereArgs: [id]); await d.delete('assets', where: 'id = ?', whereArgs: [id]); }
     if (table == 'debts') await d.delete('debts', where: 'id = ?', whereArgs: [id]);
   }
+  Future<Map<String, Object?>> exportBackup() async {
+    final d = await db;
+    final assets = await d.query('assets', orderBy: 'id ASC');
+    final debts = await d.query('debts', orderBy: 'id ASC');
+    final snapshots = await d.query('snapshots', orderBy: 'id ASC');
+    final transactions = await d.query('asset_transactions', orderBy: 'id ASC');
+    return {
+      'app': 'Asetku',
+      'schema_version': 2,
+      'exported_at': DateTime.now().toIso8601String(),
+      'assets': assets,
+      'debts': debts,
+      'snapshots': snapshots,
+      'asset_transactions': transactions,
+    };
+  }
+
+  Future<void> restoreBackup(Map<String, dynamic> backup) async {
+    if (backup['app'] != 'Asetku' || backup['schema_version'] is! int ||
+        (backup['schema_version'] as int) < 1 ||
+        (backup['schema_version'] as int) > 2) {
+      throw const FormatException('File bukan backup Asetku yang didukung.');
+    }
+    List<Map<String, Object?>> rows(String key) {
+      final value = backup[key] ?? <dynamic>[];
+      if (value is! List) throw FormatException('Data $key tidak valid.');
+      return value.map((item) {
+        if (item is! Map) throw FormatException('Baris $key tidak valid.');
+        return Map<String, Object?>.from(item);
+      }).toList();
+    }
+    final assets = rows('assets');
+    final debts = rows('debts');
+    final snapshots = rows('snapshots');
+    final transactions = rows('asset_transactions');
+    for (final row in assets) {
+      if (row['id'] is! num || row['name'] is! String ||
+          row['category'] is! String || row['cost'] is! num ||
+          row['value'] is! num || row['created_at'] is! String) {
+        throw const FormatException('Isi data aset tidak lengkap.');
+      }
+    }
+    for (final row in debts) {
+      if (row['id'] is! num || row['name'] is! String ||
+          row['amount'] is! num || row['created_at'] is! String) {
+        throw const FormatException('Isi data utang tidak lengkap.');
+      }
+    }
+    for (final row in transactions) {
+      if (row['id'] is! num || row['asset_id'] is! num ||
+          row['type'] is! String || row['units'] is! num ||
+          row['unit_price'] is! num || row['fee'] is! num ||
+          row['transaction_date'] is! String ||
+          row['note'] is! String || row['created_at'] is! String) {
+        throw const FormatException('Isi riwayat transaksi tidak lengkap.');
+      }
+    }
+    final d = await db;
+    await d.transaction((txn) async {
+      await txn.delete('asset_transactions');
+      await txn.delete('snapshots');
+      await txn.delete('debts');
+      await txn.delete('assets');
+      for (final row in assets) {
+        await txn.insert('assets', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final row in debts) {
+        await txn.insert('debts', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final row in snapshots) {
+        await txn.insert('snapshots', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final row in transactions) {
+        await txn.insert('asset_transactions', row, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+    });
+  }
+
   Future<Map<String, double>> totals() async {
     final d = await db;
     final a = await d.rawQuery('SELECT COALESCE(SUM(value),0) total, COALESCE(SUM(cost),0) cost FROM assets');
@@ -292,14 +373,83 @@ Future<void> transactionDialog(BuildContext context, int assetId) async {
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
+
+  void message(BuildContext context, String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> createBackup(BuildContext context) async {
+    try {
+      final data = await LocalDb.instance.exportBackup();
+      final bytes = Uint8List.fromList(utf8.encode(const JsonEncoder.withIndent('  ').convert(data)));
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Simpan backup Asetku',
+        fileName: 'asetku_backup_${DateFormat('yyyyMMdd_HHmm').format(DateTime.now())}.json',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        bytes: bytes,
+      );
+      if (path != null) message(context, 'Backup berhasil disimpan.');
+    } catch (e) {
+      message(context, 'Gagal membuat backup: $e');
+    }
+  }
+
+  Future<void> restoreBackup(BuildContext context) async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        dialogTitle: 'Pilih file backup Asetku',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final bytes = result.files.single.bytes;
+      if (bytes == null) throw const FormatException('File tidak dapat dibaca.');
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Struktur file backup tidak valid.');
+      }
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Pulihkan backup?'),
+          content: const Text('Data aset, utang, dan transaksi saat ini akan diganti dengan isi backup. Sebaiknya buat backup terbaru terlebih dahulu.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Pulihkan')),
+          ],
+        ),
+      );
+      if (confirm != true || !context.mounted) return;
+      await LocalDb.instance.restoreBackup(decoded);
+      if (context.mounted) message(context, 'Pemulihan data berhasil.');
+    } catch (e) {
+      if (context.mounted) message(context, 'Gagal memulihkan backup: $e');
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(16), children: const [
-    Text('Pengaturan', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
-    SizedBox(height: 12),
-    Card(child: ListTile(leading: Icon(Icons.storage_outlined), title: Text('Database lokal'), subtitle: Text('Data tersimpan di perangkat menggunakan SQLite.'))),
-    Card(child: ListTile(leading: Icon(Icons.backup_outlined), title: Text('Backup & pemulihan'), subtitle: Text('Disiapkan pada tahap berikutnya.'))),
-    Card(child: ListTile(leading: Icon(Icons.cloud_off_outlined), title: Text('Mode offline'), subtitle: Text('Pencatatan tetap berjalan tanpa internet.'))),
-    Card(child: ListTile(leading: Icon(Icons.info_outline), title: Text('Tentang Asetku'), subtitle: Text('Gratis • Tanpa akun • Tanpa lisensi'))),
+  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(16), children: [
+    const Text('Pengaturan', style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+    const SizedBox(height: 12),
+    const Card(child: ListTile(leading: Icon(Icons.storage_outlined), title: Text('Database lokal'), subtitle: Text('Data tersimpan di perangkat menggunakan SQLite.'))),
+    Card(child: ListTile(
+      leading: const Icon(Icons.backup_outlined),
+      title: const Text('Buat backup JSON'),
+      subtitle: const Text('Simpan aset, utang, saldo nilai, dan riwayat transaksi ke file.'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => createBackup(context),
+    )),
+    Card(child: ListTile(
+      leading: const Icon(Icons.restore_outlined),
+      title: const Text('Pulihkan backup JSON'),
+      subtitle: const Text('Impor file backup dan ganti data lokal setelah konfirmasi.'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => restoreBackup(context),
+    )),
+    const Card(child: ListTile(leading: Icon(Icons.cloud_off_outlined), title: Text('Mode offline'), subtitle: Text('Pencatatan tetap berjalan tanpa internet.'))),
+    const Card(child: ListTile(leading: Icon(Icons.info_outline), title: Text('Tentang Asetku'), subtitle: Text('Gratis • Tanpa akun • Tanpa lisensi'))),
   ]);
 }
 
