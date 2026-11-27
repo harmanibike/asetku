@@ -56,7 +56,10 @@ class LocalDb {
     final d = await db;
     await d.insert('asset_transactions', {'asset_id': assetId, 'type': tx.type, 'units': tx.units, 'unit_price': tx.unitPrice, 'fee': tx.fee, 'transaction_date': (tx.date ?? DateTime.now()).toIso8601String(), 'note': note, 'created_at': DateTime.now().toIso8601String()});
     final position = await positionForAsset(assetId);
-    await d.update('assets', {'cost': position.costBasis}, where: 'id = ?', whereArgs: [assetId]);
+    final market = await d.query('market_prices', where: 'asset_id = ?', whereArgs: [assetId], limit: 1);
+    final updates = <String, Object?>{'cost': position.costBasis};
+    if (market.isNotEmpty && position.units > 0) updates['value'] = position.units * (market.first['unit_price'] as num).toDouble();
+    await d.update('assets', updates, where: 'id = ?', whereArgs: [assetId]);
   }
   Future<List<Map<String, Object?>>> transactionsForAsset(int assetId) async => (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date DESC, id DESC');
   Future<Map<String, Object?>?> marketPriceForAsset(int assetId) async { final rows = await (await db).query('market_prices', where: 'asset_id = ?', whereArgs: [assetId], limit: 1); return rows.isEmpty ? null : rows.first; }
