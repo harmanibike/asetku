@@ -18,7 +18,8 @@ Emas, saham, reksadana, obligasi & SBN, crypto, kas & simpanan, properti, kendar
 - [x] Tambah/hapus aset dan kewajiban.
 - [x] Ringkasan aset, utang, kekayaan bersih, dan untung/rugi terhadap modal.
 - [x] GitHub Actions untuk analisis, pengujian, dan build APK.
-- [ ] Validasi nominal dan format input Rupiah.
+- [x] Validasi nama dan nominal aset/utang; format input Rupiah otomatis.
+- [x] Edit dan hapus data aset/utang dengan konfirmasi.
 - [ ] Transaksi beli/jual dan metode perhitungan harga perolehan.
 - [ ] Backup/restore JSON.
 - [ ] Grafik riwayat dan alokasi portofolio.
@@ -38,3 +39,9 @@ flutter build apk --release
 ```
 
 APK release dari workflow belum ditandatangani dengan keystore produksi; gunakan untuk pengujian.
+
+## Perkembangan lanjutan
+- Form aset dan utang mendukung mode tambah serta edit.
+- Nominal input ditampilkan dengan pemisah ribuan Indonesia.
+- Data hanya dapat dihapus setelah konfirmasi.
+- Pengujian unit mencakup pembacaan nominal berformat Rupiah.
