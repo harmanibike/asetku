@@ -25,8 +25,8 @@ class LocalDb {
     return _db!;
   }
   Future<List<Map<String, Object?>>> list(String table) async => (await db).query(table, orderBy: 'id DESC');
-  Future<void> addAsset(String name, String category, double cost, double value) async => (await db).insert('assets', {'name': name, 'category': category, 'cost': cost, 'value': value, 'created_at': DateTime.now().toIso8601String()});
-  Future<void> addDebt(String name, double amount) async => (await db).insert('debts', {'name': name, 'amount': amount, 'created_at': DateTime.now().toIso8601String()});
+  Future<void> addAsset(String name, String category, double cost, double value) async { await (await db).insert('assets', {'name': name, 'category': category, 'cost': cost, 'value': value, 'created_at': DateTime.now().toIso8601String()}); }
+  Future<void> addDebt(String name, double amount) async { await (await db).insert('debts', {'name': name, 'amount': amount, 'created_at': DateTime.now().toIso8601String()}); }
   Future<void> delete(String table, int id) async {
     if (table == 'assets' || table == 'debts') await (await db).delete(table, where: 'id = ?', whereArgs: [id]);
   }
