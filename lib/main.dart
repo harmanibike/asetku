@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+import 'portfolio_math.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,11 +31,12 @@ class LocalDb {
   Future<Database> get db async {
     if (_db != null) return _db!;
     final dir = await getDatabasesPath();
-    _db = await openDatabase(p.join(dir, 'asetku.db'), version: 1, onCreate: (db, version) async {
+    _db = await openDatabase(p.join(dir, 'asetku.db'), version: 2, onCreate: (db, version) async {
       await db.execute('CREATE TABLE assets (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, category TEXT NOT NULL, cost REAL NOT NULL, value REAL NOT NULL, created_at TEXT NOT NULL)');
       await db.execute('CREATE TABLE debts (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL)');
       await db.execute('CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, assets REAL NOT NULL, debts REAL NOT NULL, net_worth REAL NOT NULL, recorded_at TEXT NOT NULL)');
-    });
+      await db.execute('CREATE TABLE asset_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL, type TEXT NOT NULL, units REAL NOT NULL, unit_price REAL NOT NULL, fee REAL NOT NULL DEFAULT 0, transaction_date TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL)');
+    }, onUpgrade: (db, oldVersion, newVersion) async { if (oldVersion < 2) await db.execute('CREATE TABLE asset_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id INTEGER NOT NULL, type TEXT NOT NULL, units REAL NOT NULL, unit_price REAL NOT NULL, fee REAL NOT NULL DEFAULT 0, transaction_date TEXT NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL)'); });
     return _db!;
   }
   Future<List<Map<String, Object?>>> list(String table) async => (await db).query(table, orderBy: 'id DESC');
@@ -46,8 +48,21 @@ class LocalDb {
   Future<void> updateDebt(int id, String name, double amount) async {
     await (await db).update('debts', {'name': name, 'amount': amount}, where: 'id = ?', whereArgs: [id]);
   }
+  Future<void> addTransaction(int assetId, PortfolioTransaction tx, {String note = ''}) async {
+    final d = await db;
+    await d.insert('asset_transactions', {'asset_id': assetId, 'type': tx.type, 'units': tx.units, 'unit_price': tx.unitPrice, 'fee': tx.fee, 'transaction_date': (tx.date ?? DateTime.now()).toIso8601String(), 'note': note, 'created_at': DateTime.now().toIso8601String()});
+    final position = await positionForAsset(assetId);
+    await d.update('assets', {'cost': position.costBasis}, where: 'id = ?', whereArgs: [assetId]);
+  }
+  Future<List<Map<String, Object?>>> transactionsForAsset(int assetId) async => (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date DESC, id DESC');
+  Future<PortfolioPosition> positionForAsset(int assetId) async {
+    final rows = await (await db).query('asset_transactions', where: 'asset_id = ?', whereArgs: [assetId], orderBy: 'transaction_date ASC, id ASC');
+    return calculatePosition(rows.map((r) => PortfolioTransaction(type: r['type'] as String, units: (r['units'] as num).toDouble(), unitPrice: (r['unit_price'] as num).toDouble(), fee: (r['fee'] as num).toDouble(), date: DateTime.parse(r['transaction_date'] as String))));
+  }
   Future<void> delete(String table, int id) async {
-    if (table == 'assets' || table == 'debts') await (await db).delete(table, where: 'id = ?', whereArgs: [id]);
+    final d = await db;
+    if (table == 'assets') { await d.delete('asset_transactions', where: 'asset_id = ?', whereArgs: [id]); await d.delete('assets', where: 'id = ?', whereArgs: [id]); }
+    if (table == 'debts') await d.delete('debts', where: 'id = ?', whereArgs: [id]);
   }
   Future<Map<String, double>> totals() async {
     final d = await db;
@@ -181,6 +196,7 @@ class Records extends StatelessWidget {
               final subtitle = isAsset ? (row['category'] as String) + ' • Modal ' + rupiah(row['cost'] as num) : 'Kewajiban';
               return Card(child: ListTile(
                 leading: CircleAvatar(child: Icon(isAsset ? Icons.account_balance_wallet_outlined : Icons.credit_card_outlined)),
+                onTap: isAsset && ['Emas', 'Saham', 'Reksadana', 'Obligasi & SBN', 'Crypto'].contains(row['category']) ? () => Navigator.push(context, MaterialPageRoute(builder: (_) => AssetDetailPage(asset: row, changed: changed))) : null,
                 title: Text(row['name'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
                 subtitle: Text(subtitle), trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                   Text(rupiah(amount), style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -219,6 +235,59 @@ class Records extends StatelessWidget {
       },
     );
   }
+}
+
+class AssetDetailPage extends StatefulWidget {
+  const AssetDetailPage({super.key, required this.asset, required this.changed});
+  final Map<String, Object?> asset;
+  final VoidCallback changed;
+  @override State<AssetDetailPage> createState() => _AssetDetailPageState();
+}
+class _AssetDetailPageState extends State<AssetDetailPage> {
+  int revision = 0;
+  @override Widget build(BuildContext context) {
+    final id = widget.asset['id'] as int;
+    return Scaffold(appBar: AppBar(title: Text(widget.asset['name'] as String)),
+      floatingActionButton: FloatingActionButton.extended(onPressed: () async { await transactionDialog(context, id); if (mounted) setState(() => revision++); widget.changed(); }, icon: const Icon(Icons.add), label: const Text('Transaksi')),
+      body: FutureBuilder<List<Object>>(key: ValueKey(revision), future: Future.wait<Object>([LocalDb.instance.positionForAsset(id), LocalDb.instance.transactionsForAsset(id)]), builder: (context, s) {
+        if (!s.hasData) return const Center(child: CircularProgressIndicator());
+        final p = s.data![0] as PortfolioPosition; final rows = s.data![1] as List<Map<String, Object?>>;
+        return ListView(padding: const EdgeInsets.all(16), children: [
+          Card(child: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Posisi investasi', style: TextStyle(fontWeight: FontWeight.w800)),
+            positionLine('Jumlah unit', p.units.toStringAsFixed(6)), positionLine('Harga rata-rata', rupiah(p.averageCost)), positionLine('Modal tersisa', rupiah(p.costBasis)), positionLine('Laba/rugi terealisasi', rupiah(p.realizedProfitLoss)),
+          ]))),
+          const SizedBox(height: 12), const Text('Riwayat transaksi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          if (rows.isEmpty) const Text('Belum ada transaksi beli atau jual.'),
+          ...rows.map((r) { final buy = r['type'] == 'buy'; return Card(child: ListTile(leading: Icon(buy ? Icons.south_west : Icons.north_east, color: buy ? Colors.green : Colors.red), title: Text((buy ? 'Beli ' : 'Jual ') + r['units'].toString()), subtitle: Text(DateFormat('dd MMM yyyy').format(DateTime.parse(r['transaction_date'] as String)) + ' • ' + (r['note'] as String)), trailing: Text(rupiah((r['units'] as num) * (r['unit_price'] as num))))); }),
+          const SizedBox(height: 80),
+        ]);
+      }));
+  }
+}
+Widget positionLine(String a, String b) => Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [Expanded(child: Text(a)), Text(b, style: const TextStyle(fontWeight: FontWeight.w700))]));
+Future<void> transactionDialog(BuildContext context, int assetId) async {
+  final units = TextEditingController(), price = TextEditingController(), fee = TextEditingController(text: '0'), note = TextEditingController();
+  String type = 'buy'; final form = GlobalKey<FormState>();
+  final ok = await showDialog<bool>(context: context, builder: (ctx) => StatefulBuilder(builder: (ctx, setLocal) => AlertDialog(
+    title: const Text('Catat transaksi'),
+    content: Form(key: form, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      SegmentedButton<String>(segments: const [ButtonSegment(value: 'buy', label: Text('Beli')), ButtonSegment(value: 'sell', label: Text('Jual'))], selected: {type}, onSelectionChanged: (v) => setLocal(() => type = v.first)),
+      TextFormField(controller: units, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Jumlah unit'), validator: (v) => (double.tryParse((v ?? '').replaceAll(',', '.')) ?? 0) <= 0 ? 'Jumlah unit tidak valid' : null),
+      TextFormField(controller: price, keyboardType: TextInputType.number, inputFormatters: [RupiahInputFormatter()], decoration: const InputDecoration(labelText: 'Harga per unit (Rp)'), validator: (v) => parseNominal(v ?? '') <= 0 ? 'Harga wajib diisi' : null),
+      TextField(controller: fee, keyboardType: TextInputType.number, inputFormatters: [RupiahInputFormatter()], decoration: const InputDecoration(labelText: 'Biaya transaksi (Rp)')),
+      TextField(controller: note, decoration: const InputDecoration(labelText: 'Catatan (opsional)')),
+    ]))),
+    actions: [TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')), FilledButton(onPressed: () { if (form.currentState!.validate()) Navigator.pop(ctx, true); }, child: const Text('Simpan'))],
+  )));
+  if (ok == true) {
+    final tx = PortfolioTransaction(type: type, units: double.parse(units.text.replaceAll(',', '.')), unitPrice: parseNominal(price.text).toDouble(), fee: parseNominal(fee.text).toDouble(), date: DateTime.now());
+    try {
+      if (type == 'sell') { final current = await LocalDb.instance.positionForAsset(assetId); if (tx.units > current.units + 1e-9) throw ArgumentError('Jumlah jual melebihi unit tersedia: ' + current.units.toString()); }
+      await LocalDb.instance.addTransaction(assetId, tx, note: note.text.trim());
+    } catch (e) { if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceFirst('ArgumentError: ', '')))); }
+  }
+  units.dispose(); price.dispose(); fee.dispose(); note.dispose();
 }
 
 class SettingsPage extends StatelessWidget {
